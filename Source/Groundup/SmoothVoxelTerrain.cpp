@@ -1,95 +1,97 @@
-#include "SmoothVoxelTerrain.h"
+﻿#include "SmoothVoxelTerrain.h"
 
 ASmoothVoxelTerrain::ASmoothVoxelTerrain()
 {
-	PrimaryActorTick.bCanEverTick = false;
-	Mesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("TerrainMesh"));
-	RootComponent = Mesh;
+    PrimaryActorTick.bCanEverTick = false;
+    Mesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("TerrainMesh"));
+    RootComponent = Mesh;
 
-	// Mesh Settings for Voxel Performance
-	Mesh->bUseComplexAsSimpleCollision = true;
-	Mesh->SetCollisionResponseToAllChannels(ECR_Block);
+    // Mesh Settings for Voxel Performance
+    Mesh->bUseComplexAsSimpleCollision = true;
+    Mesh->SetCollisionResponseToAllChannels(ECR_Block);
 }
 
 void ASmoothVoxelTerrain::OnConstruction(const FTransform& Transform)
 {
-	Super::OnConstruction(Transform);
-	// SAFETY: Prevent CDO (Template) from running logic that requires a World
-	if (HasAnyFlags(RF_ClassDefaultObject) || !GetWorld()) return;
+    Super::OnConstruction(Transform);
+    // SAFETY: Prevent CDO (Template) from running logic that requires a World
+    if (HasAnyFlags(RF_ClassDefaultObject) || !GetWorld()) return;
 
-	RebuildTerrain();
+    RebuildTerrain();
 }
 
 void ASmoothVoxelTerrain::BeginPlay()
 {
-	Super::BeginPlay();
-	RebuildTerrain();
+    Super::BeginPlay();
+    RebuildTerrain();
 }
 
 void ASmoothVoxelTerrain::RebuildTerrain()
 {
-	if (!Mesh) return;
+    if (!Mesh) return;
 
-	GenerateVoxelData();
-	CreateMesh();
+    GenerateVoxelData();
+    CreateMesh();
 }
 
 void ASmoothVoxelTerrain::PrecomputeHeightMap()
 {
-	int32 MapSide = ChunkSize + 1;
-	HeightMap.Empty();
-	HeightMap.SetNumZeroed(MapSide * MapSide);
+    int32 MapSide = ChunkSize + 1;
+    HeightMap.Empty();
+    HeightMap.SetNumZeroed(MapSide * MapSide);
 
-	for (int32 x = 0; x <= ChunkSize; x++)
-	{
-		for (int32 y = 0; y <= ChunkSize; y++)
-		{
-			float NoiseValue = FMath::PerlinNoise2D(FVector2D(x + Seed, y + Seed) * NoiseScale);
-			// Calculate the absolute float height for this corner
-			HeightMap[x * MapSide + y] = (NoiseValue + 1.0f) * HeightMultiplier + (MaxHeight / 4.0f);
-		}
-	}
+    for (int32 x = 0; x <= ChunkSize; x++)
+    {
+        for (int32 y = 0; y <= ChunkSize; y++)
+        {
+            float NoiseValue = FMath::PerlinNoise2D(FVector2D(x + Seed, y + Seed) * NoiseScale);
+            // Calculate the absolute float height for this corner
+            HeightMap[x * MapSide + y] = (NoiseValue + 1.0f) * HeightMultiplier + (MaxHeight / 4.0f);
+        }
+    }
 }
 
 void ASmoothVoxelTerrain::GenerateVoxelData()
 {
-	PrecomputeHeightMap();
+    PrecomputeHeightMap();
 
-	VoxelData.Empty();
-	VoxelData.SetNumZeroed(ChunkSize * ChunkSize * MaxHeight);
+    VoxelData.Empty();
+    VoxelData.SetNumZeroed(ChunkSize * ChunkSize * MaxHeight);
 
-	for (int32 x = 0; x < ChunkSize; x++)
-	{
-		for (int32 y = 0; y < ChunkSize; y++)
-		{
-			// Find the ground level at this specific block column center (approx)
-			float H = (GetHeightAtCorner(x, y) + GetHeightAtCorner(x + 1, y) + GetHeightAtCorner(x, y + 1) + GetHeightAtCorner(x + 1, y + 1)) / 4.0f;
-			int32 GroundLevel = FMath::FloorToInt(H);
+    for (int32 x = 0; x < ChunkSize; x++)
+    {
+        for (int32 y = 0; y < ChunkSize; y++)
+        {
+            // Find the ground level at this specific block column center (approx)
+            float H = (GetHeightAtCorner(x, y) + GetHeightAtCorner(x + 1, y) + GetHeightAtCorner(x, y + 1) + GetHeightAtCorner(x + 1, y + 1)) / 4.0f;
+            int32 GroundLevel = FMath::FloorToInt(H);
 
-			for (int32 z = 0; z < MaxHeight; z++)
-			{
-				int32 Index = GetIndex(x, y, z);
-				if (!VoxelData.IsValidIndex(Index)) continue;
+            for (int32 z = 0; z < MaxHeight; z++)
+            {
+                int32 Index = GetIndex(x, y, z);
+                if (!VoxelData.IsValidIndex(Index)) continue;
 
-				if (z < GroundLevel - 3) VoxelData[Index] = EVoxelType::Stone;
-				else if (z < GroundLevel - 1) VoxelData[Index] = EVoxelType::Dirt;
-				else if (z <= GroundLevel) VoxelData[Index] = EVoxelType::Grass;
-				else VoxelData[Index] = EVoxelType::Air;
-			}
-		}
-	}
+                if (z < GroundLevel - 3) VoxelData[Index] = EVoxelType::Stone;
+                else if (z < GroundLevel - 1) VoxelData[Index] = EVoxelType::Dirt;
+                else if (z <= GroundLevel) VoxelData[Index] = EVoxelType::Grass;
+                else VoxelData[Index] = EVoxelType::Air;
+            }
+        }
+    }
 }
 
 FVector ASmoothVoxelTerrain::GetSmoothVertex(int32 x, int32 y, int32 z) const
 {
-	float TargetH = GetHeightAtCorner(x, y);
+    float TargetH = GetHeightAtCorner(x, y);
 
-	// CORE RULE: A vertex at grid height Z cannot exist above the terrain height TargetH.
-	// If it is above, we clamp it down. This creates the "Smooth" top while keeping 
-	// the bottom of the cubes perfectly square.
-	float FinalZ = FMath::Min((float)z, TargetH);
+    // NEW LOGIC:
+    // If the vertex is at the surface layer (the integer Z immediately below or at TargetH), 
+    // we move it to TargetH. This "pulls up" the bottom corners to meet the top.
+    // If it is above TargetH, it is still clamped down to TargetH.
+    // If it is further below, it remains a square cube.
+    float FinalZ = (z >= FMath::FloorToInt(TargetH)) ? TargetH : (float)z;
 
-	return FVector(x, y, FinalZ) * CubeSize;
+    return FVector(x, y, FinalZ) * CubeSize;
 }
 
 // --- Updated CreateMesh with smooth lighting and crack fixes ---
@@ -235,32 +237,32 @@ FVector ASmoothVoxelTerrain::GetSmoothNormal(int32 x, int32 y) const
 
 void ASmoothVoxelTerrain::RemoveVoxel(FVector WorldLocation)
 {
-	if (!Mesh || HasAnyFlags(RF_ClassDefaultObject)) return;
+    if (!Mesh || HasAnyFlags(RF_ClassDefaultObject)) return;
 
-	FVector LocalPos = GetActorTransform().InverseTransformPosition(WorldLocation);
+    FVector LocalPos = GetActorTransform().InverseTransformPosition(WorldLocation);
 
-	int32 x = FMath::FloorToInt(LocalPos.X / CubeSize);
-	int32 y = FMath::FloorToInt(LocalPos.Y / CubeSize);
-	int32 z = FMath::FloorToInt(LocalPos.Z / CubeSize);
+    int32 x = FMath::FloorToInt(LocalPos.X / CubeSize);
+    int32 y = FMath::FloorToInt(LocalPos.Y / CubeSize);
+    int32 z = FMath::FloorToInt(LocalPos.Z / CubeSize);
 
-	if (x >= 0 && x < ChunkSize && y >= 0 && y < ChunkSize && z >= 0 && z < MaxHeight)
-	{
-		int32 Index = GetIndex(x, y, z);
-		if (VoxelData.IsValidIndex(Index) && VoxelData[Index] != EVoxelType::Air)
-		{
-			VoxelData[Index] = EVoxelType::Air;
-			CreateMesh(); // Fast visual update
-		}
-	}
+    if (x >= 0 && x < ChunkSize && y >= 0 && y < ChunkSize && z >= 0 && z < MaxHeight)
+    {
+        int32 Index = GetIndex(x, y, z);
+        if (VoxelData.IsValidIndex(Index) && VoxelData[Index] != EVoxelType::Air)
+        {
+            VoxelData[Index] = EVoxelType::Air;
+            CreateMesh(); // Fast visual update
+        }
+    }
 }
 
 int32 ASmoothVoxelTerrain::GetIndex(int32 x, int32 y, int32 z) const
 {
-	return x + (y * ChunkSize) + (z * ChunkSize * ChunkSize);
+    return x + (y * ChunkSize) + (z * ChunkSize * ChunkSize);
 }
 
 EVoxelType ASmoothVoxelTerrain::GetVoxelAt(int32 x, int32 y, int32 z) const
 {
-	if (x < 0 || x >= ChunkSize || y < 0 || y >= ChunkSize || z < 0 || z >= MaxHeight) return EVoxelType::Air;
-	return VoxelData[GetIndex(x, y, z)];
+    if (x < 0 || x >= ChunkSize || y < 0 || y >= ChunkSize || z < 0 || z >= MaxHeight) return EVoxelType::Air;
+    return VoxelData[GetIndex(x, y, z)];
 }
