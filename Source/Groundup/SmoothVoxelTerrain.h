@@ -46,12 +46,13 @@ public:
 	UFUNCTION(CallInEditor, Category = "Voxel")
 	void RebuildTerrain();
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Terrain")
 	bool bSmoothTerrain = true;
 
 protected:
 	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
 	UPROPERTY(VisibleAnywhere)
@@ -73,13 +74,11 @@ private:
 	float GetHeightAtCorner(int32 x, int32 y) const;
 	FVector GetSmoothVertex(int32 cornerX, int32 cornerY, int32 cornerZ, int32 vX, int32 vY, int32 vZ) const;
 	FVector GetSmoothNormal(int32 x, int32 y) const;
-	void UpdateHeightMapForColumn(int32 x, int32 y);
-
 
 	void CreateFace(FVector p1, FVector p2, FVector p3, FVector p4, int32& VertexIndex,
 		TArray<FVector>& Verts, TArray<int32>& Tris, TArray<FVector>& Norms, TArray<FVector2D>& UVs, TArray<FLinearColor>& Colors);
 
-
+#if WITH_EDITOR
 	void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent);
-
+#endif
 };
