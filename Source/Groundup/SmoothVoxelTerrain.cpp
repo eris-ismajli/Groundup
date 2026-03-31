@@ -62,36 +62,65 @@ void ASmoothVoxelTerrain::GenerateVoxelData()
     {
         for (int32 y = 0; y < ChunkSize; y++)
         {
-            // Find the ground level at this specific block column center (approx)
-            float H = (GetHeightAtCorner(x, y) + GetHeightAtCorner(x + 1, y) + GetHeightAtCorner(x, y + 1) + GetHeightAtCorner(x + 1, y + 1)) / 4.0f;
+            // Average corner heights to get the approximate ground level at this column
+            float H = (GetHeightAtCorner(x, y) + GetHeightAtCorner(x + 1, y) +
+                GetHeightAtCorner(x, y + 1) + GetHeightAtCorner(x + 1, y + 1)) / 4.0f;
             int32 GroundLevel = FMath::FloorToInt(H);
 
+            // Fill from bottom up
             for (int32 z = 0; z < MaxHeight; z++)
             {
                 int32 Index = GetIndex(x, y, z);
                 if (!VoxelData.IsValidIndex(Index)) continue;
 
-                if (z < GroundLevel - 3) VoxelData[Index] = EVoxelType::Stone;
-                else if (z < GroundLevel - 1) VoxelData[Index] = EVoxelType::Dirt;
-                else if (z <= GroundLevel) VoxelData[Index] = EVoxelType::Grass;
-                else VoxelData[Index] = EVoxelType::Air;
+                if (z < GroundLevel - 3)
+                {
+                    VoxelData[Index] = EVoxelType::Stone;
+                }
+                else if (z < GroundLevel - 1)
+                {
+                    VoxelData[Index] = EVoxelType::Dirt;
+                }
+                else if (z == GroundLevel)
+                {
+                    // Only the topmost solid voxel is Grass
+                    VoxelData[Index] = EVoxelType::Grass;
+                }
+                else if (z < GroundLevel)
+                {
+                    // Voxels between Dirt depth and just below the surface become Dirt
+                    // (they were previously Grass, now Dirt)
+                    VoxelData[Index] = EVoxelType::Dirt;
+                }
+                else
+                {
+                    VoxelData[Index] = EVoxelType::Air;
+                }
             }
         }
     }
 }
 
-FVector ASmoothVoxelTerrain::GetSmoothVertex(int32 x, int32 y, int32 z) const
+FVector ASmoothVoxelTerrain::GetSmoothVertex(int32 cornerX, int32 cornerY, int32 cornerZ, int32 vX, int32 vY, int32 vZ) const
 {
-    float TargetH = GetHeightAtCorner(x, y);
+    if (!bSmoothTerrain)
+    {
+        return FVector(cornerX, cornerY, cornerZ) * CubeSize;
+    }
 
-    // NEW LOGIC:
-    // If the vertex is at the surface layer (the integer Z immediately below or at TargetH), 
-    // we move it to TargetH. This "pulls up" the bottom corners to meet the top.
-    // If it is above TargetH, it is still clamped down to TargetH.
-    // If it is further below, it remains a square cube.
-    float FinalZ = (z >= FMath::FloorToInt(TargetH)) ? TargetH : (float)z;
+    float TargetH = GetHeightAtCorner(cornerX, cornerY);
+    float FinalZ = (float)cornerZ;
 
-    return FVector(x, y, FinalZ) * CubeSize;
+    if (GetVoxelAt(vX, vY, vZ) == EVoxelType::Grass)
+    {
+        FinalZ = TargetH;
+    }
+    else if (cornerZ > vZ && GetVoxelAt(vX, vY, vZ + 1) == EVoxelType::Grass)
+    {
+        FinalZ = TargetH;
+    }
+
+    return FVector(cornerX, cornerY, FinalZ) * CubeSize;
 }
 
 // --- Updated CreateMesh with smooth lighting and crack fixes ---
@@ -115,10 +144,11 @@ void ASmoothVoxelTerrain::CreateMesh()
             {
                 if (GetVoxelAt(x, y, z) == EVoxelType::Air) continue;
 
-                FVector v001 = GetSmoothVertex(x, y, z + 1);
-                FVector v011 = GetSmoothVertex(x, y + 1, z + 1);
-                FVector v111 = GetSmoothVertex(x + 1, y + 1, z + 1);
-                FVector v101 = GetSmoothVertex(x + 1, y, z + 1);
+                // Top Vertices (Context: current voxel x, y, z)
+                FVector v001 = GetSmoothVertex(x, y, z + 1, x, y, z);
+                FVector v011 = GetSmoothVertex(x, y + 1, z + 1, x, y, z);
+                FVector v111 = GetSmoothVertex(x + 1, y + 1, z + 1, x, y, z);
+                FVector v101 = GetSmoothVertex(x + 1, y, z + 1, x, y, z);
 
                 // TOP FACE
                 if (GetVoxelAt(x, y, z + 1) == EVoxelType::Air)
@@ -131,10 +161,18 @@ void ASmoothVoxelTerrain::CreateMesh()
                     Vertices.Add(v101);
 
                     // Normals must match the vertex order
-                    Normals.Add(GetSmoothNormal(x, y));          // matches v001
-                    Normals.Add(GetSmoothNormal(x, y + 1));      // matches v011
-                    Normals.Add(GetSmoothNormal(x + 1, y + 1));  // matches v111
-                    Normals.Add(GetSmoothNormal(x + 1, y));      // matches v101
+                    if (bSmoothTerrain)
+                    {
+                        Normals.Add(GetSmoothNormal(x, y));
+                        Normals.Add(GetSmoothNormal(x, y + 1));
+                        Normals.Add(GetSmoothNormal(x + 1, y + 1));
+                        Normals.Add(GetSmoothNormal(x + 1, y));
+                    }
+                    else
+                    {
+                        FVector FlatNormal = FVector::UpVector;
+                        for (int i = 0; i < 4; i++) Normals.Add(FlatNormal);
+                    }
 
                     for (int i = 0; i < 4; i++) Colors.Add(FLinearColor::White);
 
@@ -156,26 +194,29 @@ void ASmoothVoxelTerrain::CreateMesh()
                 }
 
                 // Get bottom corners for the rest of the faces
-                FVector v000 = GetSmoothVertex(x, y, z);
-                FVector v010 = GetSmoothVertex(x, y + 1, z);
-                FVector v110 = GetSmoothVertex(x + 1, y + 1, z);
-                FVector v100 = GetSmoothVertex(x + 1, y, z);
+                FVector v000 = GetSmoothVertex(x, y, z, x, y, z);
+                FVector v010 = GetSmoothVertex(x, y + 1, z, x, y, z);
+                FVector v110 = GetSmoothVertex(x + 1, y + 1, z, x, y, z);
+                FVector v100 = GetSmoothVertex(x + 1, y, z, x, y, z);
 
                 // BOTTOM FACE
                 if (GetVoxelAt(x, y, z - 1) == EVoxelType::Air)
                     CreateFace(v100, v110, v010, v000, VertexIndex, Vertices, Triangles, Normals, UVs, Colors);
 
                 // SIDE FACES
-                if (GetVoxelAt(x + 1, y, z) == EVoxelType::Air || GetSmoothVertex(x + 1, y, z + 1).Z < v101.Z - 0.1f)
+            if (GetVoxelAt(x + 1, y, z) == EVoxelType::Air || GetSmoothVertex(x + 1, y, z + 1, x + 1, y, z).Z < v101.Z - 0.1f)
                     CreateFace(v100, v101, v111, v110, VertexIndex, Vertices, Triangles, Normals, UVs, Colors);
 
-                if (GetVoxelAt(x - 1, y, z) == EVoxelType::Air || GetSmoothVertex(x - 1, y, z + 1).Z < v001.Z - 0.1f)
+                // Left Face (X-)
+                if (GetVoxelAt(x - 1, y, z) == EVoxelType::Air || GetSmoothVertex(x, y, z + 1, x - 1, y, z).Z < v001.Z - 0.1f)
                     CreateFace(v010, v011, v001, v000, VertexIndex, Vertices, Triangles, Normals, UVs, Colors);
 
-                if (GetVoxelAt(x, y + 1, z) == EVoxelType::Air || GetSmoothVertex(x, y + 1, z + 1).Z < v111.Z - 0.1f)
+                // Front Face (Y+)
+                if (GetVoxelAt(x, y + 1, z) == EVoxelType::Air || GetSmoothVertex(x + 1, y + 1, z + 1, x, y + 1, z).Z < v111.Z - 0.1f)
                     CreateFace(v110, v111, v011, v010, VertexIndex, Vertices, Triangles, Normals, UVs, Colors);
 
-                if (GetVoxelAt(x, y - 1, z) == EVoxelType::Air || GetSmoothVertex(x, y - 1, z + 1).Z < v001.Z - 0.1f)
+                // Back Face (Y-)
+                if (GetVoxelAt(x, y - 1, z) == EVoxelType::Air || GetSmoothVertex(x, y, z + 1, x, y - 1, z).Z < v001.Z - 0.1f)
                     CreateFace(v000, v001, v101, v100, VertexIndex, Vertices, Triangles, Normals, UVs, Colors);
             }
         }
@@ -235,25 +276,159 @@ FVector ASmoothVoxelTerrain::GetSmoothNormal(int32 x, int32 y) const
     return FVector(hL - hR, hD - hU, 2.0f).GetSafeNormal();
 }
 
+
 void ASmoothVoxelTerrain::RemoveVoxel(FVector WorldLocation)
 {
-    if (!Mesh || HasAnyFlags(RF_ClassDefaultObject)) return;
+    // ========================= VALIDATION =========================
+    if (!Mesh || HasAnyFlags(RF_ClassDefaultObject))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("RemoveVoxel: Aborted – Mesh invalid or CDO."));
+        return;
+    }
 
+    // ========================= COORDINATE CONVERSION =========================
     FVector LocalPos = GetActorTransform().InverseTransformPosition(WorldLocation);
-
     int32 x = FMath::FloorToInt(LocalPos.X / CubeSize);
     int32 y = FMath::FloorToInt(LocalPos.Y / CubeSize);
     int32 z = FMath::FloorToInt(LocalPos.Z / CubeSize);
 
-    if (x >= 0 && x < ChunkSize && y >= 0 && y < ChunkSize && z >= 0 && z < MaxHeight)
+    UE_LOG(LogTemp, Warning, TEXT("\n========== REMOVE VOXEL =========="));
+    UE_LOG(LogTemp, Warning, TEXT("World click: %s"), *WorldLocation.ToString());
+    UE_LOG(LogTemp, Warning, TEXT("Local pos  : %s"), *LocalPos.ToString());
+    UE_LOG(LogTemp, Warning, TEXT("Voxel index: x=%d, y=%d, z=%d"), x, y, z);
+
+    // ========================= BOUNDS CHECK =========================
+    if (x < 0 || x >= ChunkSize || y < 0 || y >= ChunkSize || z < 0 || z >= MaxHeight)
     {
-        int32 Index = GetIndex(x, y, z);
-        if (VoxelData.IsValidIndex(Index) && VoxelData[Index] != EVoxelType::Air)
-        {
-            VoxelData[Index] = EVoxelType::Air;
-            CreateMesh(); // Fast visual update
-        }
+        UE_LOG(LogTemp, Warning, TEXT("RemoveVoxel: OUT OF BOUNDS!"));
+        return;
     }
+
+    int32 Index = GetIndex(x, y, z);
+    if (!VoxelData.IsValidIndex(Index))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("RemoveVoxel: Invalid index %d"), Index);
+        return;
+    }
+
+    EVoxelType CurrentType = VoxelData[Index];
+    if (CurrentType == EVoxelType::Air)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("RemoveVoxel: Voxel is already air – nothing to remove."));
+        return;
+    }
+
+    // ========================= NEIGHBOR INFORMATION =========================
+    // Helper lambdas with captures
+    auto GetNeighborType = [this, x, y, z](int32 dx, int32 dy, int32 dz) -> EVoxelType
+        {
+            return GetVoxelAt(x + dx, y + dy, z + dz);
+        };
+
+    auto GetCornerHeight = [this](int32 cx, int32 cy) -> float
+        {
+            return GetHeightAtCorner(cx, cy);
+        };
+
+    UE_LOG(LogTemp, Warning, TEXT("\n--- Voxel Details ---"));
+    UE_LOG(LogTemp, Warning, TEXT("Current type: %d"), (int32)CurrentType);
+
+    // Corner heights (used for smooth top)
+    float h00 = GetCornerHeight(x, y);
+    float h10 = GetCornerHeight(x + 1, y);
+    float h01 = GetCornerHeight(x, y + 1);
+    float h11 = GetCornerHeight(x + 1, y + 1);
+    UE_LOG(LogTemp, Warning, TEXT("Corner heights: (%.2f, %.2f, %.2f, %.2f)"), h00, h10, h01, h11);
+
+    // Neighbors types and their top heights (for side condition)
+    EVoxelType top = GetNeighborType(0, 0, 1);
+    EVoxelType bottom = GetNeighborType(0, 0, -1);
+    EVoxelType right = GetNeighborType(1, 0, 0);
+    EVoxelType left = GetNeighborType(-1, 0, 0);
+    EVoxelType front = GetNeighborType(0, 1, 0);
+    EVoxelType back = GetNeighborType(0, -1, 0);
+
+    UE_LOG(LogTemp, Warning, TEXT("Neighbors: Top=%d, Bottom=%d, Right=%d, Left=%d, Front=%d, Back=%d"),
+        (int32)top, (int32)bottom, (int32)right, (int32)left, (int32)front, (int32)back);
+
+    // ========================= FACE CONDITIONS (BEFORE REMOVAL) =========================
+    bool bFaceTop = (z + 1 >= MaxHeight) || (top == EVoxelType::Air);
+    bool bFaceBottom = (z - 1 < 0) || (bottom == EVoxelType::Air);
+    bool bFaceRight = (x + 1 >= ChunkSize) || (right == EVoxelType::Air);
+    bool bFaceLeft = (x - 1 < 0) || (left == EVoxelType::Air);
+    bool bFaceFront = (y + 1 >= ChunkSize) || (front == EVoxelType::Air);
+    bool bFaceBack = (y - 1 < 0) || (back == EVoxelType::Air);
+
+    // For side faces, the mesh also adds faces when the neighbor's top is significantly lower.
+    // We compute those conditions as well.
+    FVector v001 = GetSmoothVertex(x, y, z + 1, x, y, z);
+    FVector v011 = GetSmoothVertex(x, y + 1, z + 1, x, y, z);
+    FVector v111 = GetSmoothVertex(x + 1, y + 1, z + 1, x, y, z);
+    FVector v101 = GetSmoothVertex(x + 1, y, z + 1, x, y, z);
+
+    bool bRightExtra = false;
+    if (!bFaceRight) // neighbor is solid
+    {
+        FVector nv101 = GetSmoothVertex(x + 1, y, z + 1, x + 1, y, z);
+        if (nv101.Z < v101.Z - 0.1f) bRightExtra = true;
+    }
+    bool bLeftExtra = false;
+    if (!bFaceLeft)
+    {
+        FVector nv001 = GetSmoothVertex(x, y, z + 1, x - 1, y, z);
+        if (nv001.Z < v001.Z - 0.1f) bLeftExtra = true;
+    }
+    bool bFrontExtra = false;
+    if (!bFaceFront)
+    {
+        FVector nv111 = GetSmoothVertex(x + 1, y + 1, z + 1, x, y + 1, z);
+        if (nv111.Z < v111.Z - 0.1f) bFrontExtra = true;
+    }
+    bool bBackExtra = false;
+    if (!bFaceBack)
+    {
+        FVector nv001 = GetSmoothVertex(x, y, z + 1, x, y - 1, z);
+        if (nv001.Z < v001.Z - 0.1f) bBackExtra = true;
+    }
+
+    // Build list of faces that would be generated (including extra conditions)
+    TArray<FString> GeneratedFaces;
+    if (bFaceTop) GeneratedFaces.Add(TEXT("Top"));
+    if (bFaceBottom) GeneratedFaces.Add(TEXT("Bottom"));
+    if (bFaceRight || bRightExtra) GeneratedFaces.Add(TEXT("Right"));
+    if (bFaceLeft || bLeftExtra) GeneratedFaces.Add(TEXT("Left"));
+    if (bFaceFront || bFrontExtra) GeneratedFaces.Add(TEXT("Front"));
+    if (bFaceBack || bBackExtra) GeneratedFaces.Add(TEXT("Back"));
+
+    // ========================= LOG THE FACES =========================
+    if (GeneratedFaces.Num() == 6)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Faces that will be removed (before removal): ALL 6 faces"));
+    }
+    else if (GeneratedFaces.Num() == 0)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Faces that will be removed (before removal): NONE (voxel is completely buried)"));
+    }
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Faces that will be removed (before removal): %s"), *FString::Join(GeneratedFaces, TEXT(", ")));
+    }
+
+    // Log extra reasons
+    if (!bFaceRight && bRightExtra)
+        UE_LOG(LogTemp, Warning, TEXT("  Right face added due to height difference (neighbor top lower)"));
+    if (!bFaceLeft && bLeftExtra)
+        UE_LOG(LogTemp, Warning, TEXT("  Left face added due to height difference"));
+    if (!bFaceFront && bFrontExtra)
+        UE_LOG(LogTemp, Warning, TEXT("  Front face added due to height difference"));
+    if (!bFaceBack && bBackExtra)
+        UE_LOG(LogTemp, Warning, TEXT("  Back face added due to height difference"));
+
+    // ========================= PERFORM REMOVAL =========================
+    UE_LOG(LogTemp, Warning, TEXT("\nRemoving voxel and rebuilding mesh..."));
+    VoxelData[Index] = EVoxelType::Air;
+    CreateMesh();
+    UE_LOG(LogTemp, Warning, TEXT("RemoveVoxel completed.\n=================================================\n"));
 }
 
 int32 ASmoothVoxelTerrain::GetIndex(int32 x, int32 y, int32 z) const
@@ -266,3 +441,11 @@ EVoxelType ASmoothVoxelTerrain::GetVoxelAt(int32 x, int32 y, int32 z) const
     if (x < 0 || x >= ChunkSize || y < 0 || y >= ChunkSize || z < 0 || z >= MaxHeight) return EVoxelType::Air;
     return VoxelData[GetIndex(x, y, z)];
 }
+
+#if WITH_EDITOR
+void ASmoothVoxelTerrain::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+    Super::PostEditChangeProperty(PropertyChangedEvent);
+    RebuildTerrain();
+}
+#endif
