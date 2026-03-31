@@ -58,6 +58,9 @@ void ASmoothVoxelTerrain::GenerateVoxelData()
     VoxelData.Empty();
     VoxelData.SetNumZeroed(ChunkSize * ChunkSize * MaxHeight);
 
+    // Minimum height for a grass voxel (world units)
+    const float MinGrassThickness = 0.2f;
+
     for (int32 x = 0; x < ChunkSize; x++)
     {
         for (int32 y = 0; y < ChunkSize; y++)
@@ -68,18 +71,36 @@ void ASmoothVoxelTerrain::GenerateVoxelData()
             float h11 = GetHeightAtCorner(x + 1, y + 1);
 
             float MinCorner = FMath::Min3(h00, h10, FMath::Min(h01, h11));
-            int32 GroundLevel = FMath::FloorToInt(MinCorner);
+            // Lower the base so grass thickness is at least MinGrassThickness
+            int32 GroundLevel = FMath::FloorToInt(MinCorner - MinGrassThickness);
+            GroundLevel = FMath::Clamp(GroundLevel, 0, MaxHeight - 1);
 
             for (int32 z = 0; z < MaxHeight; z++)
             {
                 int32 Index = GetIndex(x, y, z);
                 if (!VoxelData.IsValidIndex(Index)) continue;
 
-                if (z < GroundLevel - 3)                VoxelData[Index] = EVoxelType::Stone;
-                else if (z < GroundLevel - 1)           VoxelData[Index] = EVoxelType::Dirt;
-                else if (z == GroundLevel)              VoxelData[Index] = EVoxelType::Grass;
-                else if (z < GroundLevel)               VoxelData[Index] = EVoxelType::Dirt;
-                else                                    VoxelData[Index] = EVoxelType::Air;
+                if (z < GroundLevel - 3)
+                {
+                    VoxelData[Index] = EVoxelType::Stone;
+                }
+                else if (z < GroundLevel - 1)
+                {
+                    VoxelData[Index] = EVoxelType::Dirt;
+                }
+                else if (z == GroundLevel)
+                {
+                    // Only the topmost solid voxel is Grass
+                    VoxelData[Index] = EVoxelType::Grass;
+                }
+                else if (z < GroundLevel)
+                {
+                    VoxelData[Index] = EVoxelType::Dirt;
+                }
+                else
+                {
+                    VoxelData[Index] = EVoxelType::Air;
+                }
             }
         }
     }
@@ -95,13 +116,8 @@ FVector ASmoothVoxelTerrain::GetSmoothVertex(int32 cornerX, int32 cornerY, int32
     float TargetH = GetHeightAtCorner(cornerX, cornerY);
     float FinalZ = (float)cornerZ;
 
-    // If the current voxel is Grass and this vertex is above its base (top face or top edge of side faces)
+    // Only warp vertices that are above the base of a grass block
     if (GetVoxelAt(vX, vY, vZ) == EVoxelType::Grass && cornerZ > vZ)
-    {
-        FinalZ = TargetH;
-    }
-    // Otherwise, if the voxel above this vertex is Grass (i.e., this vertex belongs to the top of a voxel directly under Grass)
-    else if (cornerZ > vZ && GetVoxelAt(vX, vY, vZ + 1) == EVoxelType::Grass)
     {
         FinalZ = TargetH;
     }
@@ -277,10 +293,17 @@ void ASmoothVoxelTerrain::RemoveVoxel(FVector WorldLocation)
     int32 y = FMath::FloorToInt((LocalPos.Y + KINDA_SMALL_NUMBER) / CubeSize);
     int32 z = FMath::FloorToInt((LocalPos.Z + KINDA_SMALL_NUMBER) / CubeSize);
 
-    UE_LOG(LogTemp, Warning, TEXT("\n========== REMOVE VOXEL =========="));
-    UE_LOG(LogTemp, Warning, TEXT("World click: %s"), *WorldLocation.ToString());
-    UE_LOG(LogTemp, Warning, TEXT("Local pos  : %s"), *LocalPos.ToString());
-    UE_LOG(LogTemp, Warning, TEXT("Voxel index: x=%d, y=%d, z=%d"), x, y, z);
+    // Adjust for warped grass top: if computed voxel is Air and voxel below is Grass,
+    // and hit point is above that Grass's base, then we're actually clicking the Grass's top face.
+    if (z > 0 && GetVoxelAt(x, y, z) == EVoxelType::Air && GetVoxelAt(x, y, z - 1) == EVoxelType::Grass)
+    {
+        float GrassBaseZ = (z - 1) * CubeSize;
+        if (LocalPos.Z > GrassBaseZ) // hit point is above the base of the grass below
+        {
+            z = z - 1;
+        }
+    }
+
 
     if (x < 0 || x >= ChunkSize || y < 0 || y >= ChunkSize || z < 0 || z >= MaxHeight)
     {
@@ -301,13 +324,10 @@ void ASmoothVoxelTerrain::RemoveVoxel(FVector WorldLocation)
         return;
     }
 
-    // Optional: Keep the face logging you added – it’s helpful for debugging.
-    // ... (the rest of your logging and removal remains unchanged)
-
     VoxelData[Index] = EVoxelType::Air;
     CreateMesh();
-    UE_LOG(LogTemp, Warning, TEXT("RemoveVoxel completed.\n=================================================\n"));
 }
+
 int32 ASmoothVoxelTerrain::GetIndex(int32 x, int32 y, int32 z) const
 {
     return x + (y * ChunkSize) + (z * ChunkSize * ChunkSize);
