@@ -82,6 +82,9 @@ protected:
 	UFUNCTION(BlueprintCallable, Category = "Input")
 	void BreakCube();
 
+	UFUNCTION(BlueprintCallable, Category = "Input")
+	void PlaceCube();
+
 protected:
 
 	/** Set up input action bindings */

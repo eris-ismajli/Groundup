@@ -126,8 +126,6 @@ void AGroundupCharacter::DoJumpEnd()
 
 void AGroundupCharacter::BreakCube()
 {
-	// 1. Cooldown Check
-
 	if (!FirstPersonCameraComponent) return;
 
 	FVector Start = FirstPersonCameraComponent->GetComponentLocation();
@@ -149,6 +147,31 @@ void AGroundupCharacter::BreakCube()
 
 
 			HitTerrain->RemoveVoxel(LocationInsideBlock);
+		}
+	}
+}
+
+void AGroundupCharacter::PlaceCube()
+{
+	if (!FirstPersonCameraComponent) return;
+
+	FVector Start = FirstPersonCameraComponent->GetComponentLocation();
+	FVector End = Start + (FirstPersonCameraComponent->GetForwardVector() * 1000.0f);
+
+	FHitResult HitResult;
+	FCollisionQueryParams QueryParams;
+	QueryParams.AddIgnoredActor(this);
+
+	if (GetWorld()->LineTraceSingleByChannel(HitResult, Start, End, ECC_Visibility, QueryParams))
+	{
+		ASmoothVoxelTerrain* HitTerrain = Cast<ASmoothVoxelTerrain>(HitResult.GetActor());
+		if (HitTerrain)
+		{
+
+			//FVector LocationInsideBlock = HitResult.ImpactPoint - (HitResult.ImpactNormal * 5.0f);
+
+
+			HitTerrain->PlaceVoxel(HitResult.ImpactPoint);
 		}
 	}
 }

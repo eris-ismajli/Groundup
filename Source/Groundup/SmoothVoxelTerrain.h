@@ -43,11 +43,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Voxel")
 	void RemoveVoxel(FVector WorldLocation);
 
+	UFUNCTION(BlueprintCallable, Category = "Voxel")
+	void PlaceVoxel(FVector WorldLocation, EVoxelType Type = EVoxelType::Dirt);
+
 	UFUNCTION(CallInEditor, Category = "Voxel")
 	void RebuildTerrain();
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Terrain")
 	bool bSmoothTerrain = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel")
+	float MinGrassThickness = 0.f;
 
 protected:
 	virtual void OnConstruction(const FTransform& Transform) override;
@@ -74,9 +80,13 @@ private:
 	float GetHeightAtCorner(int32 x, int32 y) const;
 	FVector GetSmoothVertex(int32 cornerX, int32 cornerY, int32 cornerZ, int32 vX, int32 vY, int32 vZ) const;
 	FVector GetSmoothNormal(int32 x, int32 y) const;
+	float GetInterpolatedHeight(float X, float Y) const;
+
 
 	void CreateFace(FVector p1, FVector p2, FVector p3, FVector p4, int32& VertexIndex,
 		TArray<FVector>& Verts, TArray<int32>& Tris, TArray<FVector>& Norms, TArray<FVector2D>& UVs, TArray<FLinearColor>& Colors);
+
+	float GetNeighborTopHeight(int32 neighborX, int32 neighborY, int32 neighborZ, const FVector& point) const;
 
 #if WITH_EDITOR
 	void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent);
