@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
@@ -59,6 +59,8 @@ protected:
 	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual ~ASmoothVoxelTerrain() override;
+
 
 private:
 	UPROPERTY(VisibleAnywhere)
@@ -88,7 +90,5 @@ private:
 
 	float GetNeighborTopHeight(int32 neighborX, int32 neighborY, int32 neighborZ, const FVector& point) const;
 
-#if WITH_EDITOR
-	void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent);
-#endif
+	bool bIsDestroyed = false;
 };

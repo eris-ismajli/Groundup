@@ -11,6 +11,14 @@ ASmoothVoxelTerrain::ASmoothVoxelTerrain()
     Mesh->SetCollisionResponseToAllChannels(ECR_Block);
 }
 
+ASmoothVoxelTerrain::~ASmoothVoxelTerrain()
+{
+    // Never touch UObject subsystems in the destructor.
+    // Just mark destroyed and clear the raw pointer.
+    bIsDestroyed = true;
+    Mesh = nullptr;
+}
+
 // -----------------------------------
 // Lifecycle
 // -----------------------------------
@@ -18,7 +26,7 @@ void ASmoothVoxelTerrain::OnConstruction(const FTransform& Transform)
 {
     Super::OnConstruction(Transform);
 
-    if (HasAnyFlags(RF_ClassDefaultObject) || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed())
+    if (bIsDestroyed || HasAnyFlags(RF_ClassDefaultObject) || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed())
         return;
 
     RebuildTerrain();
@@ -27,13 +35,26 @@ void ASmoothVoxelTerrain::OnConstruction(const FTransform& Transform)
 void ASmoothVoxelTerrain::BeginPlay()
 {
     Super::BeginPlay();
+
+    if (bIsDestroyed)
+        return;
+
     RebuildTerrain();
 }
 
 void ASmoothVoxelTerrain::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+    // Mark destroyed first to block any incoming calls (e.g., from input)
+    bIsDestroyed = true;
+
+    // Safely release procedural mesh resources
     if (Mesh && IsValid(Mesh))
+    {
         Mesh->ClearAllMeshSections();
+    }
+    Mesh = nullptr;
+
+    // Free CPU‑side data
     VoxelData.Empty();
     HeightMap.Empty();
 
@@ -45,7 +66,7 @@ void ASmoothVoxelTerrain::EndPlay(const EEndPlayReason::Type EndPlayReason)
 // -----------------------------------
 void ASmoothVoxelTerrain::RebuildTerrain()
 {
-    if (!Mesh || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed())
+    if (bIsDestroyed || !Mesh || !IsValid(Mesh) || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed())
         return;
 
     GenerateVoxelData();
@@ -151,7 +172,6 @@ float ASmoothVoxelTerrain::GetHeightAtCorner(int32 x, int32 y) const
     return HeightMap.IsValidIndex(Index) ? HeightMap[Index] : 0.0f;
 }
 
-// Bilinear interpolation of the heightmap at any world X,Y (local coordinates)
 float ASmoothVoxelTerrain::GetInterpolatedHeight(float X, float Y) const
 {
     int32 x0 = FMath::FloorToInt(X / CubeSize);
@@ -172,15 +192,14 @@ float ASmoothVoxelTerrain::GetInterpolatedHeight(float X, float Y) const
     return FMath::Lerp(FMath::Lerp(h00, h10, fx), FMath::Lerp(h01, h11, fx), fy);
 }
 
-// Height of a neighbor's top at a given point (for visibility tests)
 float ASmoothVoxelTerrain::GetNeighborTopHeight(int32 neighborX, int32 neighborY, int32 neighborZ, const FVector& point) const
 {
     EVoxelType neighborType = GetVoxelAt(neighborX, neighborY, neighborZ);
     if (neighborType == EVoxelType::Air)
-        return -FLT_MAX; // Air exposes everything
+        return -FLT_MAX;
     else if (neighborType == EVoxelType::Grass)
         return GetInterpolatedHeight(point.X, point.Y);
-    else // Dirt, Stone, etc.
+    else
         return (neighborZ + 1) * CubeSize;
 }
 
@@ -191,7 +210,8 @@ int32 ASmoothVoxelTerrain::GetIndex(int32 x, int32 y, int32 z) const
 
 EVoxelType ASmoothVoxelTerrain::GetVoxelAt(int32 x, int32 y, int32 z) const
 {
-    if (x < 0 || x >= ChunkSize || y < 0 || y >= ChunkSize || z < 0 || z >= MaxHeight) return EVoxelType::Air;
+    if (x < 0 || x >= ChunkSize || y < 0 || y >= ChunkSize || z < 0 || z >= MaxHeight)
+        return EVoxelType::Air;
 
     int32 Index = GetIndex(x, y, z);
     return VoxelData.IsValidIndex(Index) ? VoxelData[Index] : EVoxelType::Air;
@@ -202,7 +222,7 @@ EVoxelType ASmoothVoxelTerrain::GetVoxelAt(int32 x, int32 y, int32 z) const
 // -----------------------------------
 void ASmoothVoxelTerrain::CreateMesh()
 {
-    if (!Mesh || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed())
+    if (bIsDestroyed || !Mesh || !IsValid(Mesh) || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed())
         return;
 
     if (VoxelData.Num() == 0 || HeightMap.Num() == 0)
@@ -224,19 +244,17 @@ void ASmoothVoxelTerrain::CreateMesh()
             {
                 if (GetVoxelAt(x, y, z) == EVoxelType::Air) continue;
 
-                // Top face vertices
                 FVector v001 = GetSmoothVertex(x, y, z + 1, x, y, z);
                 FVector v011 = GetSmoothVertex(x, y + 1, z + 1, x, y, z);
                 FVector v111 = GetSmoothVertex(x + 1, y + 1, z + 1, x, y, z);
                 FVector v101 = GetSmoothVertex(x + 1, y, z + 1, x, y, z);
 
-                // Bottom face vertices
                 FVector v000 = GetSmoothVertex(x, y, z, x, y, z);
                 FVector v010 = GetSmoothVertex(x, y + 1, z, x, y, z);
                 FVector v110 = GetSmoothVertex(x + 1, y + 1, z, x, y, z);
                 FVector v100 = GetSmoothVertex(x + 1, y, z, x, y, z);
 
-                // ----- Top face -----
+                // Top face
                 if (GetVoxelAt(x, y, z + 1) == EVoxelType::Air)
                 {
                     Vertices.Add(v001); Vertices.Add(v011); Vertices.Add(v111); Vertices.Add(v101);
@@ -264,13 +282,12 @@ void ASmoothVoxelTerrain::CreateMesh()
                     VertexIndex += 4;
                 }
 
-                // ----- Bottom face -----
+                // Bottom face
                 if (GetVoxelAt(x, y, z - 1) == EVoxelType::Air)
                 {
                     CreateFace(v100, v110, v010, v000, VertexIndex, Vertices, Triangles, Normals, UVs, Colors);
                 }
 
-                // ----- Side faces (test all four vertices for visibility) -----
                 // +X face
                 if (GetVoxelAt(x + 1, y, z) == EVoxelType::Air ||
                     GetNeighborTopHeight(x + 1, y, z, v100) < v100.Z ||
@@ -314,7 +331,8 @@ void ASmoothVoxelTerrain::CreateMesh()
         }
     }
 
-    if (!Mesh || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed())
+    // Final validation before applying to the component
+    if (bIsDestroyed || !Mesh || !IsValid(Mesh) || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed())
         return;
 
     Mesh->ClearAllMeshSections();
@@ -324,7 +342,6 @@ void ASmoothVoxelTerrain::CreateMesh()
     }
 }
 
-// Creates a quadrilateral face with proper normals
 void ASmoothVoxelTerrain::CreateFace(FVector p1, FVector p2, FVector p3, FVector p4, int32& VertexIdx,
     TArray<FVector>& Verts, TArray<int32>& Tris, TArray<FVector>& Norms, TArray<FVector2D>& UVs, TArray<FLinearColor>& Colors)
 {
@@ -335,7 +352,7 @@ void ASmoothVoxelTerrain::CreateFace(FVector p1, FVector p2, FVector p3, FVector
 
     float area1 = TriangleArea(p1, p2, p3);
     float area2 = TriangleArea(p1, p3, p4);
-    if ((area1 + area2) < 0.001f) return; // degenerate quad
+    if ((area1 + area2) < 0.001f) return;
 
     FVector Normal = FVector::CrossProduct(p4 - p1, p2 - p1).GetSafeNormal();
 
@@ -361,7 +378,7 @@ void ASmoothVoxelTerrain::CreateFace(FVector p1, FVector p2, FVector p3, FVector
 // -----------------------------------
 void ASmoothVoxelTerrain::RemoveVoxel(FVector WorldLocation)
 {
-    if (!Mesh || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed() || HasAnyFlags(RF_ClassDefaultObject))
+    if (bIsDestroyed || !Mesh || !IsValid(Mesh) || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed() || HasAnyFlags(RF_ClassDefaultObject))
         return;
 
     FVector LocalPos = GetActorTransform().InverseTransformPosition(WorldLocation);
@@ -370,7 +387,6 @@ void ASmoothVoxelTerrain::RemoveVoxel(FVector WorldLocation)
     int32 y = FMath::FloorToInt((LocalPos.Y + KINDA_SMALL_NUMBER) / CubeSize);
     int32 z = FMath::FloorToInt((LocalPos.Z + KINDA_SMALL_NUMBER) / CubeSize);
 
-    // Special handling for grass removal
     if (z > 0 && GetVoxelAt(x, y, z) == EVoxelType::Air && GetVoxelAt(x, y, z - 1) == EVoxelType::Grass)
     {
         float GrassBaseZ = (z - 1) * CubeSize;
@@ -403,7 +419,7 @@ void ASmoothVoxelTerrain::RemoveVoxel(FVector WorldLocation)
 
 void ASmoothVoxelTerrain::PlaceVoxel(FVector WorldLocation, EVoxelType Type)
 {
-    if (!Mesh || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed() || HasAnyFlags(RF_ClassDefaultObject))
+    if (bIsDestroyed || !Mesh || !IsValid(Mesh) || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed() || HasAnyFlags(RF_ClassDefaultObject))
         return;
 
     FVector LocalPos = GetActorTransform().InverseTransformPosition(WorldLocation);
@@ -429,34 +445,5 @@ void ASmoothVoxelTerrain::PlaceVoxel(FVector WorldLocation, EVoxelType Type)
         return;
 
     VoxelData[Index] = Type;
-
-    // Flatten adjacent grass blocks at the same height (to prevent slanted edges)
-    //const int32 adjOffsets[4][2] = { {1,0}, {-1,0}, {0,1}, {0,-1} };
-    //for (const auto& offset : adjOffsets)
-    //{
-    //    int32 nx = x + offset[0];
-    //    int32 ny = y + offset[1];
-    //    if (nx >= 0 && nx < ChunkSize && ny >= 0 && ny < ChunkSize)
-    //    {
-    //        if (GetVoxelAt(nx, ny, z) == EVoxelType::Grass)
-    //        {
-    //            int32 neighborIdx = GetIndex(nx, ny, z);
-    //            VoxelData[neighborIdx] = EVoxelType::Dirt;
-    //        }
-    //    }
-    //}
-
     CreateMesh();
 }
-
-#if WITH_EDITOR
-void ASmoothVoxelTerrain::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
-{
-    Super::PostEditChangeProperty(PropertyChangedEvent);
-
-    if (!GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed() || IsTemplate() || HasAnyFlags(RF_BeginDestroyed | RF_FinishDestroyed))
-        return;
-
-    RebuildTerrain();
-}
-#endif
