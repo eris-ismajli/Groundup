@@ -1,32 +1,32 @@
-﻿#include "SmoothVoxelTerrain.h"
+﻿// SmoothVoxelTerrain.cpp
+#include "SmoothVoxelTerrain.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "DynamicMesh/DynamicMeshAttributeSet.h"
+#include "UDynamicMesh.h"
+#include "Engine/World.h"
 #include "Components/DynamicMeshComponent.h"
 
-static constexpr float SIDE_FACE_EPSILON = 0.01f;
+using namespace UE::Geometry;
 
 ASmoothVoxelTerrain::ASmoothVoxelTerrain()
 {
     PrimaryActorTick.bCanEverTick = false;
 
-    // Create Dynamic Mesh Component instead of Procedural Mesh
-    Mesh = CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("TerrainMesh"));
-    RootComponent = Mesh;
+    MeshComponent = CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("TerrainMesh"));
+    RootComponent = MeshComponent;
 
-    // Enable complex collision (like original)
-    Mesh->SetComplexAsSimpleCollisionEnabled(true);
-    Mesh->SetCollisionResponseToAllChannels(ECR_Block);
+    MeshComponent->SetVisibility(true);
+    MeshComponent->SetHiddenInGame(false);
+    MeshComponent->SetCastShadow(true);
+    MeshComponent->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 }
 
 ASmoothVoxelTerrain::~ASmoothVoxelTerrain()
 {
     bIsDestroyed = true;
-    Mesh = nullptr;
+    MeshComponent = nullptr;
 }
 
-// -----------------------------------
-// Lifecycle
-// -----------------------------------
 void ASmoothVoxelTerrain::OnConstruction(const FTransform& Transform)
 {
     Super::OnConstruction(Transform);
@@ -45,28 +45,21 @@ void ASmoothVoxelTerrain::BeginPlay()
 void ASmoothVoxelTerrain::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
     bIsDestroyed = true;
-
-    // Clear the dynamic mesh
-    if (Mesh && IsValid(Mesh))
+    if (MeshComponent && IsValid(MeshComponent))
     {
-        Mesh->SetMesh(UE::Geometry::FDynamicMesh3());
+        if (UDynamicMesh* Mesh = MeshComponent->GetDynamicMesh())
+            Mesh->Reset();
     }
-    Mesh = nullptr;
-
+    MeshComponent = nullptr;
     VoxelData.Empty();
     HeightMap.Empty();
-
     Super::EndPlay(EndPlayReason);
 }
 
-// -----------------------------------
-// Terrain Generation (unchanged from your original)
-// -----------------------------------
 void ASmoothVoxelTerrain::RebuildTerrain()
 {
-    if (bIsDestroyed || !Mesh || !IsValid(Mesh) || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed())
+    if (bIsDestroyed || !MeshComponent || !IsValid(MeshComponent) || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed())
         return;
-
     GenerateVoxelData();
     CreateMesh();
 }
@@ -126,9 +119,9 @@ void ASmoothVoxelTerrain::GenerateVoxelData()
     }
 }
 
-// -----------------------------------
-// Mesh Utilities (unchanged)
-// -----------------------------------
+// -------------------------------------------------------------------
+// Mesh Utilities (exactly as in your working reference)
+// -------------------------------------------------------------------
 FVector ASmoothVoxelTerrain::GetSmoothVertex(int32 cornerX, int32 cornerY, int32 cornerZ, int32 vX, int32 vY, int32 vZ) const
 {
     if (!bSmoothTerrain)
@@ -192,13 +185,8 @@ float ASmoothVoxelTerrain::GetNeighborTopHeight(int32 neighborX, int32 neighborY
     if (neighborType == EVoxelType::Air)
         return -FLT_MAX;
     else if (neighborType == EVoxelType::Grass)
-    {
-        // Direct heightmap value at the corner (point.X, point.Y) – no interpolation
-        int32 cornerX = FMath::RoundToInt(point.X / CubeSize);
-        int32 cornerY = FMath::RoundToInt(point.Y / CubeSize);
-        return GetHeightAtCorner(cornerX, cornerY);
-    }
-    else // Stone or Dirt
+        return GetInterpolatedHeight(point.X, point.Y);
+    else
         return (neighborZ + 1) * CubeSize;
 }
 
@@ -215,65 +203,173 @@ EVoxelType ASmoothVoxelTerrain::GetVoxelAt(int32 x, int32 y, int32 z) const
     return VoxelData.IsValidIndex(Index) ? VoxelData[Index] : EVoxelType::Air;
 }
 
-// -----------------------------------
-// Mesh Generation using FDynamicMesh3
-// -----------------------------------
+// -------------------------------------------------------------------
+// Mesh Creation – now builds UDynamicMesh (exact same vertex logic)
+// -------------------------------------------------------------------
 void ASmoothVoxelTerrain::CreateMesh()
 {
-    if (bIsDestroyed || !Mesh || !IsValid(Mesh) || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed())
+    if (bIsDestroyed || !MeshComponent || !IsValid(MeshComponent) || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed())
         return;
     if (VoxelData.Num() == 0 || HeightMap.Num() == 0)
         return;
 
-    TArray<FVector> AllVertices;
-    TArray<int32> AllTriangles;
-    TArray<int32> VoxelTriCount;
-    VoxelTriCount.SetNumZeroed(ChunkSize * ChunkSize * MaxHeight);
+    TArray<FVector> Vertices;
+    TArray<int32> Triangles;
+    TArray<FVector> Normals;
+    TArray<FVector2D> UVs;
+    // Colors array omitted – UDynamicMesh doesn't require it; all white default.
+
+    int32 VertexIndex = 0;
 
     for (int32 x = 0; x < ChunkSize; x++)
+    {
         for (int32 y = 0; y < ChunkSize; y++)
+        {
             for (int32 z = 0; z < MaxHeight; z++)
             {
-                int32 VoxelIdx = GetIndex(x, y, z);
-                int32 Before = AllTriangles.Num();
-                GenerateVoxelMesh(x, y, z, AllVertices, AllTriangles);
-                int32 After = AllTriangles.Num();
-                VoxelTriCount[VoxelIdx] = (After - Before) / 3;
+                if (GetVoxelAt(x, y, z) == EVoxelType::Air) continue;
+
+                FVector v001 = GetSmoothVertex(x, y, z + 1, x, y, z);
+                FVector v011 = GetSmoothVertex(x, y + 1, z + 1, x, y, z);
+                FVector v111 = GetSmoothVertex(x + 1, y + 1, z + 1, x, y, z);
+                FVector v101 = GetSmoothVertex(x + 1, y, z + 1, x, y, z);
+
+                FVector v000 = GetSmoothVertex(x, y, z, x, y, z);
+                FVector v010 = GetSmoothVertex(x, y + 1, z, x, y, z);
+                FVector v110 = GetSmoothVertex(x + 1, y + 1, z, x, y, z);
+                FVector v100 = GetSmoothVertex(x + 1, y, z, x, y, z);
+
+                // Top face
+                if (GetVoxelAt(x, y, z + 1) == EVoxelType::Air)
+                {
+                    // Add vertices
+                    int32 Base = VertexIndex;
+                    Vertices.Add(v001); Vertices.Add(v011); Vertices.Add(v111); Vertices.Add(v101);
+                    // Normals
+                    if (bSmoothTerrain)
+                    {
+                        Normals.Add(GetSmoothNormal(x, y));
+                        Normals.Add(GetSmoothNormal(x, y + 1));
+                        Normals.Add(GetSmoothNormal(x + 1, y + 1));
+                        Normals.Add(GetSmoothNormal(x + 1, y));
+                    }
+                    else
+                    {
+                        for (int i = 0; i < 4; i++) Normals.Add(FVector::UpVector);
+                    }
+                    // UVs
+                    UVs.Add(FVector2D(0, 1)); UVs.Add(FVector2D(0, 0));
+                    UVs.Add(FVector2D(1, 0)); UVs.Add(FVector2D(1, 1));
+                    // Triangles
+                    Triangles.Add(Base);   Triangles.Add(Base + 1); Triangles.Add(Base + 2);
+                    Triangles.Add(Base);   Triangles.Add(Base + 2); Triangles.Add(Base + 3);
+                    VertexIndex += 4;
+                }
+
+                // Bottom face
+                if (GetVoxelAt(x, y, z - 1) == EVoxelType::Air)
+                {
+                    CreateFace(v100, v110, v010, v000, VertexIndex, Vertices, Triangles, Normals, UVs);
+                }
+
+                // +X face
+                if (GetVoxelAt(x + 1, y, z) == EVoxelType::Air ||
+                    GetNeighborTopHeight(x + 1, y, z, v100) < v100.Z ||
+                    GetNeighborTopHeight(x + 1, y, z, v101) < v101.Z ||
+                    GetNeighborTopHeight(x + 1, y, z, v111) < v111.Z ||
+                    GetNeighborTopHeight(x + 1, y, z, v110) < v110.Z)
+                {
+                    CreateFace(v100, v101, v111, v110, VertexIndex, Vertices, Triangles, Normals, UVs);
+                }
+
+                // -X face
+                if (GetVoxelAt(x - 1, y, z) == EVoxelType::Air ||
+                    GetNeighborTopHeight(x - 1, y, z, v010) < v010.Z ||
+                    GetNeighborTopHeight(x - 1, y, z, v011) < v011.Z ||
+                    GetNeighborTopHeight(x - 1, y, z, v001) < v001.Z ||
+                    GetNeighborTopHeight(x - 1, y, z, v000) < v000.Z)
+                {
+                    CreateFace(v010, v011, v001, v000, VertexIndex, Vertices, Triangles, Normals, UVs);
+                }
+
+                // +Y face
+                if (GetVoxelAt(x, y + 1, z) == EVoxelType::Air ||
+                    GetNeighborTopHeight(x, y + 1, z, v110) < v110.Z ||
+                    GetNeighborTopHeight(x, y + 1, z, v111) < v111.Z ||
+                    GetNeighborTopHeight(x, y + 1, z, v011) < v011.Z ||
+                    GetNeighborTopHeight(x, y + 1, z, v010) < v010.Z)
+                {
+                    CreateFace(v110, v111, v011, v010, VertexIndex, Vertices, Triangles, Normals, UVs);
+                }
+
+                // -Y face
+                if (GetVoxelAt(x, y - 1, z) == EVoxelType::Air ||
+                    GetNeighborTopHeight(x, y - 1, z, v000) < v000.Z ||
+                    GetNeighborTopHeight(x, y - 1, z, v001) < v001.Z ||
+                    GetNeighborTopHeight(x, y - 1, z, v101) < v101.Z ||
+                    GetNeighborTopHeight(x, y - 1, z, v100) < v100.Z)
+                {
+                    CreateFace(v000, v001, v101, v100, VertexIndex, Vertices, Triangles, Normals, UVs);
+                }
             }
-
-    if (AllVertices.Num() == 0) return;
-
-    UE::Geometry::FDynamicMesh3 NewMesh;
-    for (const FVector& Pos : AllVertices)
-        NewMesh.AppendVertex(FVector3d(Pos.X, Pos.Y, Pos.Z));
-    for (int32 i = 0; i < AllTriangles.Num(); i += 3)
-        NewMesh.AppendTriangle(AllTriangles[i], AllTriangles[i + 1], AllTriangles[i + 2]);
-
-    // Build triangle map
-    VoxelTriangleMap.Empty();
-    int32 CurrentTri = 0;
-    for (int32 VoxelIdx = 0; VoxelIdx < VoxelTriCount.Num(); VoxelIdx++)
-    {
-        int32 NumTris = VoxelTriCount[VoxelIdx];
-        if (NumTris == 0) continue;
-        TArray<int32> TriIDs;
-        for (int32 t = 0; t < NumTris; t++)
-        {
-            int32 TriID = CurrentTri + t;
-            NewMesh.SetTriangleGroup(TriID, VoxelIdx);
-            TriIDs.Add(TriID);
         }
-        VoxelTriangleMap.Add(VoxelIdx, TriIDs);
-        CurrentTri += NumTris;
     }
 
-    Mesh->SetMesh(MoveTemp(NewMesh));
-    Mesh->NotifyMeshUpdated();
-    Mesh->UpdateCollision(true);
+    if (Vertices.Num() == 0) return;
+
+    // Build UDynamicMesh
+    UDynamicMesh* NewDynamicMesh = NewObject<UDynamicMesh>(this);
+    NewDynamicMesh->EditMesh([&](FDynamicMesh3& MeshOut)
+        {
+            MeshOut.Clear();
+            MeshOut.EnableAttributes();
+            FDynamicMeshAttributeSet* Attr = MeshOut.Attributes();
+            if (!Attr) return;
+            Attr->SetNumUVLayers(1);
+            FDynamicMeshUVOverlay* UVOverlay = Attr->GetUVLayer(0);
+            FDynamicMeshNormalOverlay* NormalOverlay = Attr->PrimaryNormals();
+            if (!UVOverlay || !NormalOverlay) return;
+
+            TArray<int32> VertexIDs;
+            VertexIDs.Reserve(Vertices.Num());
+            for (const FVector& V : Vertices)
+                VertexIDs.Add(MeshOut.AppendVertex(FVector3d(V.X, V.Y, V.Z)));
+
+            TArray<int32> NormalElemIDs, UVElemIDs;
+            NormalElemIDs.Reserve(Vertices.Num());
+            UVElemIDs.Reserve(Vertices.Num());
+            for (int32 i = 0; i < Vertices.Num(); ++i)
+            {
+                NormalElemIDs.Add(NormalOverlay->AppendElement(FVector3f(Normals[i])));
+                UVElemIDs.Add(UVOverlay->AppendElement(FVector2f(UVs[i].X, UVs[i].Y)));
+            }
+
+            for (int32 i = 0; i < Triangles.Num(); i += 3)
+            {
+                int32 v0 = VertexIDs[Triangles[i]];
+                int32 v1 = VertexIDs[Triangles[i + 1]];
+                int32 v2 = VertexIDs[Triangles[i + 2]];
+                int32 TriID = MeshOut.AppendTriangle(v0, v1, v2);
+                if (TriID == FDynamicMesh3::InvalidID) continue;
+
+                NormalOverlay->SetTriangle(TriID, FIndex3i(NormalElemIDs[Triangles[i]],
+                    NormalElemIDs[Triangles[i + 1]],
+                    NormalElemIDs[Triangles[i + 2]]));
+                UVOverlay->SetTriangle(TriID, FIndex3i(UVElemIDs[Triangles[i]],
+                    UVElemIDs[Triangles[i + 1]],
+                    UVElemIDs[Triangles[i + 2]]));
+            }
+        });
+
+    MeshComponent->SetDynamicMesh(NewDynamicMesh);
+    MeshComponent->UpdateCollision(true);
+    if (TerrainMaterial) MeshComponent->SetMaterial(0, TerrainMaterial);
+    MeshComponent->SetVisibility(true);
+    bMeshBuilt = true;
 }
-// Update CreateFace to only fill vertices and triangles
+
 void ASmoothVoxelTerrain::CreateFace(FVector p1, FVector p2, FVector p3, FVector p4, int32& VertexIdx,
-    TArray<FVector>& Verts, TArray<int32>& Tris) const
+    TArray<FVector>& Verts, TArray<int32>& Tris, TArray<FVector>& Norms, TArray<FVector2D>& UVs)
 {
     auto TriangleArea = [](const FVector& a, const FVector& b, const FVector& c) -> float
         {
@@ -284,152 +380,27 @@ void ASmoothVoxelTerrain::CreateFace(FVector p1, FVector p2, FVector p3, FVector
     float area2 = TriangleArea(p1, p3, p4);
     if ((area1 + area2) < 0.001f) return;
 
+    FVector Normal = FVector::CrossProduct(p4 - p1, p2 - p1).GetSafeNormal();
+
     Verts.Add(p1); Verts.Add(p2); Verts.Add(p3); Verts.Add(p4);
+
     Tris.Add(VertexIdx); Tris.Add(VertexIdx + 1); Tris.Add(VertexIdx + 2);
     Tris.Add(VertexIdx); Tris.Add(VertexIdx + 2); Tris.Add(VertexIdx + 3);
+
+    for (int i = 0; i < 4; i++) Norms.Add(Normal);
+
+    UVs.Add(FVector2D(0, 1)); UVs.Add(FVector2D(0, 0));
+    UVs.Add(FVector2D(1, 0)); UVs.Add(FVector2D(1, 1));
+
     VertexIdx += 4;
 }
 
-void ASmoothVoxelTerrain::GenerateVoxelMesh(int32 x, int32 y, int32 z,
-    TArray<FVector>& OutVertices, TArray<int32>& OutTriangles) const
-{
-    if (GetVoxelAt(x, y, z) == EVoxelType::Air) return;
-
-    FVector v001 = GetSmoothVertex(x, y, z + 1, x, y, z);
-    FVector v011 = GetSmoothVertex(x, y + 1, z + 1, x, y, z);
-    FVector v111 = GetSmoothVertex(x + 1, y + 1, z + 1, x, y, z);
-    FVector v101 = GetSmoothVertex(x + 1, y, z + 1, x, y, z);
-    FVector v000 = GetSmoothVertex(x, y, z, x, y, z);
-    FVector v010 = GetSmoothVertex(x, y + 1, z, x, y, z);
-    FVector v110 = GetSmoothVertex(x + 1, y + 1, z, x, y, z);
-    FVector v100 = GetSmoothVertex(x + 1, y, z, x, y, z);
-
-    int32 StartVertex = OutVertices.Num();
-
-    // Top face
-    if (GetVoxelAt(x, y, z + 1) == EVoxelType::Air)
-    {
-        OutVertices.Add(v001); OutVertices.Add(v011);
-        OutVertices.Add(v111); OutVertices.Add(v101);
-        OutTriangles.Add(StartVertex + 0); OutTriangles.Add(StartVertex + 1); OutTriangles.Add(StartVertex + 2);
-        OutTriangles.Add(StartVertex + 0); OutTriangles.Add(StartVertex + 2); OutTriangles.Add(StartVertex + 3);
-        StartVertex += 4;
-    }
-
-    // Bottom face
-    if (GetVoxelAt(x, y, z - 1) == EVoxelType::Air)
-    {
-        CreateFace(v100, v110, v010, v000, StartVertex, OutVertices, OutTriangles);
-    }
-
-    // +X face
-    if (GetVoxelAt(x + 1, y, z) == EVoxelType::Air ||
-        GetNeighborTopHeight(x + 1, y, z, v101) < v101.Z - SIDE_FACE_EPSILON ||
-        GetNeighborTopHeight(x + 1, y, z, v111) < v111.Z - SIDE_FACE_EPSILON)
-    {
-        CreateFace(v100, v101, v111, v110, StartVertex, OutVertices, OutTriangles);
-    }
-
-    // -X face
-    if (GetVoxelAt(x - 1, y, z) == EVoxelType::Air ||
-        GetNeighborTopHeight(x - 1, y, z, v011) < v011.Z - SIDE_FACE_EPSILON ||
-        GetNeighborTopHeight(x - 1, y, z, v001) < v001.Z - SIDE_FACE_EPSILON)
-    {
-        CreateFace(v010, v011, v001, v000, StartVertex, OutVertices, OutTriangles);
-    }
-
-    // +Y face
-    if (GetVoxelAt(x, y + 1, z) == EVoxelType::Air ||
-        GetNeighborTopHeight(x, y + 1, z, v111) < v111.Z - SIDE_FACE_EPSILON ||
-        GetNeighborTopHeight(x, y + 1, z, v011) < v011.Z - SIDE_FACE_EPSILON)
-    {
-        CreateFace(v110, v111, v011, v010, StartVertex, OutVertices, OutTriangles);
-    }
-
-    // -Y face
-    if (GetVoxelAt(x, y - 1, z) == EVoxelType::Air ||
-        GetNeighborTopHeight(x, y - 1, z, v001) < v001.Z - SIDE_FACE_EPSILON ||
-        GetNeighborTopHeight(x, y - 1, z, v101) < v101.Z - SIDE_FACE_EPSILON)
-    {
-        CreateFace(v000, v001, v101, v100, StartVertex, OutVertices, OutTriangles);
-    }
-}
-
-void ASmoothVoxelTerrain::RegenerateVoxelAndNeighbors(int32 CenterX, int32 CenterY, int32 CenterZ)
-{
-    if (!Mesh || !IsValid(Mesh)) return;
-
-    UE::Geometry::FDynamicMesh3* DynMesh = Mesh->GetMesh();
-    if (!DynMesh) return;
-
-    // 3x3x3 region around center
-    TSet<int32> AffectedIndices;
-    for (int32 dx = -1; dx <= 1; dx++)
-        for (int32 dy = -1; dy <= 1; dy++)
-            for (int32 dz = -1; dz <= 1; dz++)
-            {
-                int32 nx = CenterX + dx, ny = CenterY + dy, nz = CenterZ + dz;
-                if (nx >= 0 && nx < ChunkSize && ny >= 0 && ny < ChunkSize && nz >= 0 && nz < MaxHeight)
-                    AffectedIndices.Add(GetIndex(nx, ny, nz));
-            }
-
-    // Remove old triangles
-    for (int32 VoxelIdx : AffectedIndices)
-    {
-        if (VoxelTriangleMap.Contains(VoxelIdx))
-        {
-            for (int32 TriID : VoxelTriangleMap[VoxelIdx])
-            {
-                if (DynMesh->IsTriangle(TriID))
-                    DynMesh->RemoveTriangle(TriID, true, true); // remove vertices too
-            }
-            VoxelTriangleMap.Remove(VoxelIdx);
-        }
-    }
-
-    // Generate new geometry
-    for (int32 VoxelIdx : AffectedIndices)
-    {
-        int32 x = VoxelIdx % ChunkSize;
-        int32 y = (VoxelIdx / ChunkSize) % ChunkSize;
-        int32 z = VoxelIdx / (ChunkSize * ChunkSize);
-
-        TArray<FVector> NewVerts;
-        TArray<int32> NewTris;
-        GenerateVoxelMesh(x, y, z, NewVerts, NewTris);
-
-        if (NewVerts.Num() == 0) continue;
-
-        int32 BaseVertex = DynMesh->MaxVertexID();
-        for (const FVector& V : NewVerts)
-            DynMesh->AppendVertex(FVector3d(V.X, V.Y, V.Z));
-
-        TArray<int32> NewTriangleIDs;
-        for (int32 i = 0; i < NewTris.Num(); i += 3)
-        {
-            int32 TriID = DynMesh->AppendTriangle(
-                BaseVertex + NewTris[i],
-                BaseVertex + NewTris[i + 1],
-                BaseVertex + NewTris[i + 2]);
-            if (TriID >= 0)
-            {
-                DynMesh->SetTriangleGroup(TriID, VoxelIdx);
-                NewTriangleIDs.Add(TriID);
-            }
-        }
-        if (NewTriangleIDs.Num() > 0)
-            VoxelTriangleMap.Add(VoxelIdx, NewTriangleIDs);
-    }
-
-    Mesh->NotifyMeshUpdated();
-    Mesh->UpdateCollision(true);
-}
-// -----------------------------------
-// Voxel Editing (unchanged logic, but now calls CreateMesh which uses dynamic mesh)
-// -----------------------------------
+// -------------------------------------------------------------------
+// Voxel Editing (unchanged, except Mesh -> MeshComponent)
+// -------------------------------------------------------------------
 void ASmoothVoxelTerrain::RemoveVoxel(FVector WorldLocation)
 {
-    if (bIsDestroyed || !Mesh || !IsValid(Mesh) || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed() || HasAnyFlags(RF_ClassDefaultObject))
+    if (bIsDestroyed || !MeshComponent || !IsValid(MeshComponent) || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed() || HasAnyFlags(RF_ClassDefaultObject))
         return;
 
     FVector LocalPos = GetActorTransform().InverseTransformPosition(WorldLocation);
@@ -441,8 +412,7 @@ void ASmoothVoxelTerrain::RemoveVoxel(FVector WorldLocation)
     if (z > 0 && GetVoxelAt(x, y, z) == EVoxelType::Air && GetVoxelAt(x, y, z - 1) == EVoxelType::Grass)
     {
         float GrassBaseZ = (z - 1) * CubeSize;
-        if (LocalPos.Z > GrassBaseZ)
-            z -= 1;
+        if (LocalPos.Z > GrassBaseZ) z -= 1;
     }
 
     if (x < 0 || x >= ChunkSize || y < 0 || y >= ChunkSize || z < 0 || z >= MaxHeight)
@@ -465,13 +435,12 @@ void ASmoothVoxelTerrain::RemoveVoxel(FVector WorldLocation)
     }
 
     VoxelData[Index] = EVoxelType::Air;
-    //CreateMesh();   // full rebuild – you can later change to partial update
-    RegenerateVoxelAndNeighbors(x, y, z);
+    CreateMesh();
 }
 
 void ASmoothVoxelTerrain::PlaceVoxel(FVector WorldLocation, EVoxelType Type)
 {
-    if (bIsDestroyed || !Mesh || !IsValid(Mesh) || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed() || HasAnyFlags(RF_ClassDefaultObject))
+    if (bIsDestroyed || !MeshComponent || !IsValid(MeshComponent) || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed() || HasAnyFlags(RF_ClassDefaultObject))
         return;
 
     FVector LocalPos = GetActorTransform().InverseTransformPosition(WorldLocation);
@@ -493,11 +462,8 @@ void ASmoothVoxelTerrain::PlaceVoxel(FVector WorldLocation, EVoxelType Type)
         return;
     }
 
-    if (VoxelData[Index] == Type)
-        return;
+    if (VoxelData[Index] == Type) return;
 
     VoxelData[Index] = Type;
-    //CreateMesh();   // full rebuild – you can later change to partial update
-    RegenerateVoxelAndNeighbors(x, y, z);
-
+    CreateMesh();
 }

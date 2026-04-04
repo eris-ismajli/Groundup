@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
@@ -8,95 +8,92 @@
 UENUM(BlueprintType)
 enum class EVoxelType : uint8
 {
-	Air,
-	Grass,
-	Dirt,
-	Stone
+    Air   UMETA(DisplayName = "Air"),
+    Grass UMETA(DisplayName = "Grass"),
+    Dirt  UMETA(DisplayName = "Dirt"),
+    Stone UMETA(DisplayName = "Stone")
 };
 
 UCLASS()
 class GROUNDUP_API ASmoothVoxelTerrain : public AActor
 {
-	GENERATED_BODY()
+    GENERATED_BODY()
 
 public:
-	ASmoothVoxelTerrain();
+    ASmoothVoxelTerrain();
+    ~ASmoothVoxelTerrain();
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Settings")
-	int32 Seed = 1337;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Settings")
-	float CubeSize = 100.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Settings")
-	int32 ChunkSize = 16;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Settings")
-	int32 MaxHeight = 64;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Noise")
-	float NoiseScale = 0.05f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Noise")
-	float HeightMultiplier = 20.0f;
-
-	UFUNCTION(BlueprintCallable, Category = "Voxel")
-	void RemoveVoxel(FVector WorldLocation);
-
-	UFUNCTION(BlueprintCallable, Category = "Voxel")
-	void PlaceVoxel(FVector WorldLocation, EVoxelType Type = EVoxelType::Dirt);
-
-	UFUNCTION(CallInEditor, Category = "Voxel")
-	void RebuildTerrain();
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Terrain")
-	bool bSmoothTerrain = true;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel")
-	float MinGrassThickness = 0.f;
 
 protected:
-	virtual void OnConstruction(const FTransform& Transform) override;
-	virtual void BeginPlay() override;
-	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
-	virtual ~ASmoothVoxelTerrain() override;
+    virtual void BeginPlay() override;
+    virtual void OnConstruction(const FTransform& Transform) override;
+    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
+public:
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    UMaterialInterface* TerrainMaterial = nullptr;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    int32 ChunkSize = 32;               // X and Y size in voxels
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    int32 MaxHeight = 32;               // Z size in voxels
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    float CubeSize = 100.0f;            // World units per voxel
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    float NoiseScale = 0.01f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    float HeightMultiplier = 2000.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    float MinGrassThickness = 1.5f;     // In voxel units
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    int32 Seed = 1337;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    bool bSmoothTerrain = false;        // Set true for heightmap‑aligned tops
+
+    UFUNCTION(BlueprintCallable, Category = "Terrain")
+    void RebuildTerrain();
+
+    UFUNCTION(BlueprintCallable, Category = "Terrain")
+    void RemoveVoxel(FVector WorldLocation);
+
+    UFUNCTION(BlueprintCallable, Category = "Terrain")
+    void PlaceVoxel(FVector WorldLocation, EVoxelType Type = EVoxelType::Dirt);
 
 private:
-	UPROPERTY(VisibleAnywhere)
-	UDynamicMeshComponent* Mesh;
+    UPROPERTY(EditAnywhere)
+    UDynamicMeshComponent* MeshComponent = nullptr;
 
-	UPROPERTY()
-	TArray<EVoxelType> VoxelData;
+    TArray<EVoxelType> VoxelData;
+    TArray<float> HeightMap;            // Size (ChunkSize+1)^2
 
-	TMap<int32, TArray<int32>> VoxelTriangleMap;
+    bool bMeshBuilt = false;
+    bool bIsDestroyed = false;
 
-	UPROPERTY()
-	TArray<float> HeightMap;
+    // Helper functions
+    void PrecomputeHeightMap();
+    void GenerateVoxelData();
+    void CreateMesh();
 
-	void GenerateVoxelData();
-	void PrecomputeHeightMap();
-	void CreateMesh();
+    float GetHeightAtCorner(int32 x, int32 y) const;
+    EVoxelType GetVoxelAt(int32 x, int32 y, int32 z) const;
+    int32 GetIndex(int32 x, int32 y, int32 z) const;
 
-	// Logic Helpers
-	int32 GetIndex(int32 x, int32 y, int32 z) const;
-	EVoxelType GetVoxelAt(int32 x, int32 y, int32 z) const;
-	float GetHeightAtCorner(int32 x, int32 y) const;
-	FVector GetSmoothVertex(int32 cornerX, int32 cornerY, int32 cornerZ, int32 vX, int32 vY, int32 vZ) const;
-	FVector GetSmoothNormal(int32 x, int32 y) const;
-	float GetInterpolatedHeight(float X, float Y) const;
+    FVector GetSmoothVertex(int32 cornerX, int32 cornerY, int32 cornerZ, int32 vX, int32 vY, int32 vZ) const;
 
-	void GenerateVoxelMesh(int32 x, int32 y, int32 z,
-		TArray<FVector>& OutVertices, TArray<int32>& OutTriangles) const;
-
-	void RegenerateVoxelAndNeighbors(int32 CenterX, int32 CenterY, int32 CenterZ);
+    float GetNeighborTopHeight(int32 nx, int32 ny, int32 nz, const FVector& vertex) const;
+    float GetInterpolatedHeight(float worldX, float worldY) const;
 
 
+    void CreateFace(FVector p1, FVector p2, FVector p3, FVector p4, int32& VertexIdx,
+        TArray<FVector>& Verts, TArray<int32>& Tris, TArray<FVector>& Norms, TArray<FVector2D>& UVs);
 
-	void CreateFace(FVector p1, FVector p2, FVector p3, FVector p4, int32& VertexIdx,
-		TArray<FVector>& Verts, TArray<int32>& Tris) const;
+    FVector GetSmoothNormal(int32 x, int32 y) const;
 
-	float GetNeighborTopHeight(int32 neighborX, int32 neighborY, int32 neighborZ, const FVector& point) const;
-
-	bool bIsDestroyed = false;
 };
