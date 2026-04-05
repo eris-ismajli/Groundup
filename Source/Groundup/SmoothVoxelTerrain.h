@@ -35,13 +35,19 @@ public:
     UMaterialInterface* TerrainMaterial = nullptr;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
-    int32 ChunkSize = 32;               // X and Y size in voxels
+    int32 ChunkSize = 32;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
-    int32 MaxHeight = 32;               // Z size in voxels
+    int32 MaxHeight = 64;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
-    float CubeSize = 100.0f;            // World units per voxel
+    int32 WorldChunksX = 4;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    int32 WorldChunksY = 4;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    float CubeSize = 100.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
     float NoiseScale = 0.01f;
@@ -50,13 +56,13 @@ public:
     float HeightMultiplier = 2000.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
-    float MinGrassThickness = 1.5f;     // In voxel units
+    float MinGrassThickness = 1.5f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
     int32 Seed = 1337;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
-    bool bSmoothTerrain = false;        // Set true for heightmap‑aligned tops
+    bool bSmoothTerrain = false;
 
     UFUNCTION(BlueprintCallable, Category = "Terrain")
     void RebuildTerrain();
@@ -67,46 +73,67 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Terrain")
     void PlaceVoxel(FVector WorldLocation, EVoxelType Type = EVoxelType::Dirt);
 
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Collision")
+    TEnumAsByte<ECollisionEnabled::Type> CollisionEnabled = ECollisionEnabled::QueryAndPhysics;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Collision")
+    FName CollisionProfileName = "BlockAll";
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Collision")
+    bool bGenerateOverlapEvents = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Rendering")
+    bool bCastShadow = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Rendering")
+    bool bReceivesDecals = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Collision")
+    bool bUseComplexAsSimpleCollision = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Collision")
+    bool bEnableComplexCollision = true;
+
+#if WITH_EDITOR
+    virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
+
 private:
-    UPROPERTY(EditAnywhere)
-    UDynamicMeshComponent* MeshComponent = nullptr;
+    struct FVoxelChunk
+    {
+        UDynamicMeshComponent* MeshComponent = nullptr;
+        TArray<EVoxelType> VoxelData;
+        TArray<TArray<int32>> VoxelTriangles;
+        FIntVector Coord;
 
-    TArray<EVoxelType> VoxelData;
-    TArray<float> HeightMap;            // Size (ChunkSize+1)^2
+        void BuildMesh(ASmoothVoxelTerrain* TerrainOwner);
+        void UpdateVoxel(int32 LocalX, int32 LocalY, int32 LocalZ, EVoxelType NewType, ASmoothVoxelTerrain* TerrainOwner);
+    };
 
-    // Per‑voxel storage of triangle IDs in the current dynamic mesh.
-    // Index = GetIndex(x,y,z). Each inner array holds IDs of all triangles belonging to that voxel.
-    TArray<TArray<int32>> VoxelTriangles;
+    TMap<FIntVector, TUniquePtr<FVoxelChunk>> Chunks;
 
-    bool bMeshBuilt = false;
-    bool bIsDestroyed = false;
+    UPROPERTY(VisibleAnywhere)
+    USceneComponent* RootSceneComponent = nullptr;
 
-    // Helper functions
-    void PrecomputeHeightMap();
-    void GenerateVoxelData();
-    void CreateMesh();                     // Full build (initial or after full clear)
+    void GenerateChunks();
+    FIntVector WorldToChunkCoord(const FVector& WorldPos) const;
+    void WorldToLocalVoxel(const FVector& WorldPos, const FIntVector& ChunkCoord, int32& OutX, int32& OutY, int32& OutZ) const;
+    FVector ChunkCoordToWorldOrigin(const FIntVector& ChunkCoord) const;
 
-    // Incremental update: rebuild only the voxel at (x,y,z) and its 6 face‑neighbors.
-    void UpdateVoxelRegion(int32 x, int32 y, int32 z);
-
-    // Directly append faces of a single voxel into a dynamic mesh, recording triangle IDs.
-    void AppendVoxelFaces(int32 x, int32 y, int32 z, UE::Geometry::FDynamicMesh3& Mesh, TArray<int32>& OutTriIDs);
-
-    // Conversions
-    int32 GetIndex(int32 x, int32 y, int32 z) const;
-    void IndexToXYZ(int32 Idx, int32& OutX, int32& OutY, int32& OutZ) const;
-
-    // Voxel data access
-    EVoxelType GetVoxelAt(int32 x, int32 y, int32 z) const;
-    float GetHeightAtCorner(int32 x, int32 y) const;
+    EVoxelType GetVoxelAtWorld(int32 WorldX, int32 WorldY, int32 WorldZ) const;
+    float GetHeightAtWorldCorner(int32 WorldX, int32 WorldY) const;
     float GetInterpolatedHeight(float WorldX, float WorldY) const;
-    float GetNeighborTopHeight(int32 nx, int32 ny, int32 nz, const FVector& Vertex) const;
 
-    // Vertex and normal generation
-    FVector GetSmoothVertex(int32 CornerX, int32 CornerY, int32 CornerZ, int32 VoxX, int32 VoxY, int32 VoxZ) const;
-    FVector GetSmoothNormal(int32 x, int32 y) const;
+    FVector GetSmoothVertexWorld(int32 WorldX, int32 WorldY, int32 WorldZ, int32 VoxX, int32 VoxY, int32 VoxZ) const;
+    FVector GetSmoothNormalWorld(int32 WorldX, int32 WorldY) const;
+    float GetNeighborTopHeightWorld(int32 WorldX, int32 WorldY, int32 WorldZ, const FVector& Vertex) const;
 
-    // Legacy helper (kept for compatibility, not used in incremental path)
-    void CreateFace(FVector p1, FVector p2, FVector p3, FVector p4, int32& VertexIdx,
-        TArray<FVector>& Verts, TArray<int32>& Tris, TArray<FVector>& Norms, TArray<FVector2D>& UVs);
+    void AppendVoxelFacesWorld(int32 WorldX, int32 WorldY, int32 WorldZ, UE::Geometry::FDynamicMesh3& Mesh, TArray<int32>& OutTriIDs);
+
+    //void RebuildAllChunks();
+    //void RebuildChunk(const FIntVector& ChunkCoord);
+    FVoxelChunk* GetChunk(const FIntVector& Coord);
+    const FVoxelChunk* GetChunk(const FIntVector& Coord) const;
+
+    bool bIsDestroyed = false;
 };
