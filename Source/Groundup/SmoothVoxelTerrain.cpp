@@ -1,5 +1,4 @@
-﻿// SmoothVoxelTerrain.cpp
-#include "SmoothVoxelTerrain.h"
+﻿#include "SmoothVoxelTerrain.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "DynamicMesh/DynamicMeshAttributeSet.h"
 #include "UDynamicMesh.h"
@@ -8,6 +7,9 @@
 
 using namespace UE::Geometry;
 
+// -------------------------------------------------------------------
+// Lifetime & Basics
+// -------------------------------------------------------------------
 ASmoothVoxelTerrain::ASmoothVoxelTerrain()
 {
     PrimaryActorTick.bCanEverTick = false;
@@ -53,17 +55,13 @@ void ASmoothVoxelTerrain::EndPlay(const EEndPlayReason::Type EndPlayReason)
     MeshComponent = nullptr;
     VoxelData.Empty();
     HeightMap.Empty();
+    VoxelTriangles.Empty();
     Super::EndPlay(EndPlayReason);
 }
 
-void ASmoothVoxelTerrain::RebuildTerrain()
-{
-    if (bIsDestroyed || !MeshComponent || !IsValid(MeshComponent) || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed())
-        return;
-    GenerateVoxelData();
-    CreateMesh();
-}
-
+// -------------------------------------------------------------------
+// Terrain Generation (unchanged logic)
+// -------------------------------------------------------------------
 void ASmoothVoxelTerrain::PrecomputeHeightMap()
 {
     int32 MapSide = ChunkSize + 1;
@@ -120,7 +118,7 @@ void ASmoothVoxelTerrain::GenerateVoxelData()
 }
 
 // -------------------------------------------------------------------
-// Mesh Utilities (exactly as in your working reference)
+// Geometry Helpers (unchanged from your working version)
 // -------------------------------------------------------------------
 FVector ASmoothVoxelTerrain::GetSmoothVertex(int32 cornerX, int32 cornerY, int32 cornerZ, int32 vX, int32 vY, int32 vZ) const
 {
@@ -195,6 +193,14 @@ int32 ASmoothVoxelTerrain::GetIndex(int32 x, int32 y, int32 z) const
     return x + (y * ChunkSize) + (z * ChunkSize * ChunkSize);
 }
 
+void ASmoothVoxelTerrain::IndexToXYZ(int32 Idx, int32& OutX, int32& OutY, int32& OutZ) const
+{
+    OutZ = Idx / (ChunkSize * ChunkSize);
+    int32 Remaining = Idx % (ChunkSize * ChunkSize);
+    OutY = Remaining / ChunkSize;
+    OutX = Remaining % ChunkSize;
+}
+
 EVoxelType ASmoothVoxelTerrain::GetVoxelAt(int32 x, int32 y, int32 z) const
 {
     if (x < 0 || x >= ChunkSize || y < 0 || y >= ChunkSize || z < 0 || z >= MaxHeight)
@@ -204,7 +210,7 @@ EVoxelType ASmoothVoxelTerrain::GetVoxelAt(int32 x, int32 y, int32 z) const
 }
 
 // -------------------------------------------------------------------
-// Mesh Creation – now builds UDynamicMesh (exact same vertex logic)
+// Core Mesh Building – Full Build (initial)
 // -------------------------------------------------------------------
 void ASmoothVoxelTerrain::CreateMesh()
 {
@@ -213,113 +219,13 @@ void ASmoothVoxelTerrain::CreateMesh()
     if (VoxelData.Num() == 0 || HeightMap.Num() == 0)
         return;
 
-    TArray<FVector> Vertices;
-    TArray<int32> Triangles;
-    TArray<FVector> Normals;
-    TArray<FVector2D> UVs;
-    // Colors array omitted – UDynamicMesh doesn't require it; all white default.
+    // Reset triangle mapping
+    VoxelTriangles.SetNum(VoxelData.Num());
+    for (auto& Arr : VoxelTriangles)
+        Arr.Empty();
 
-    int32 VertexIndex = 0;
-
-    for (int32 x = 0; x < ChunkSize; x++)
-    {
-        for (int32 y = 0; y < ChunkSize; y++)
-        {
-            for (int32 z = 0; z < MaxHeight; z++)
-            {
-                if (GetVoxelAt(x, y, z) == EVoxelType::Air) continue;
-
-                FVector v001 = GetSmoothVertex(x, y, z + 1, x, y, z);
-                FVector v011 = GetSmoothVertex(x, y + 1, z + 1, x, y, z);
-                FVector v111 = GetSmoothVertex(x + 1, y + 1, z + 1, x, y, z);
-                FVector v101 = GetSmoothVertex(x + 1, y, z + 1, x, y, z);
-
-                FVector v000 = GetSmoothVertex(x, y, z, x, y, z);
-                FVector v010 = GetSmoothVertex(x, y + 1, z, x, y, z);
-                FVector v110 = GetSmoothVertex(x + 1, y + 1, z, x, y, z);
-                FVector v100 = GetSmoothVertex(x + 1, y, z, x, y, z);
-
-                // Top face
-                if (GetVoxelAt(x, y, z + 1) == EVoxelType::Air)
-                {
-                    // Add vertices
-                    int32 Base = VertexIndex;
-                    Vertices.Add(v001); Vertices.Add(v011); Vertices.Add(v111); Vertices.Add(v101);
-                    // Normals
-                    if (bSmoothTerrain)
-                    {
-                        Normals.Add(GetSmoothNormal(x, y));
-                        Normals.Add(GetSmoothNormal(x, y + 1));
-                        Normals.Add(GetSmoothNormal(x + 1, y + 1));
-                        Normals.Add(GetSmoothNormal(x + 1, y));
-                    }
-                    else
-                    {
-                        for (int i = 0; i < 4; i++) Normals.Add(FVector::UpVector);
-                    }
-                    // UVs
-                    UVs.Add(FVector2D(0, 1)); UVs.Add(FVector2D(0, 0));
-                    UVs.Add(FVector2D(1, 0)); UVs.Add(FVector2D(1, 1));
-                    // Triangles
-                    Triangles.Add(Base);   Triangles.Add(Base + 1); Triangles.Add(Base + 2);
-                    Triangles.Add(Base);   Triangles.Add(Base + 2); Triangles.Add(Base + 3);
-                    VertexIndex += 4;
-                }
-
-                // Bottom face
-                if (GetVoxelAt(x, y, z - 1) == EVoxelType::Air)
-                {
-                    CreateFace(v100, v110, v010, v000, VertexIndex, Vertices, Triangles, Normals, UVs);
-                }
-
-                // +X face
-                if (GetVoxelAt(x + 1, y, z) == EVoxelType::Air ||
-                    GetNeighborTopHeight(x + 1, y, z, v100) < v100.Z ||
-                    GetNeighborTopHeight(x + 1, y, z, v101) < v101.Z ||
-                    GetNeighborTopHeight(x + 1, y, z, v111) < v111.Z ||
-                    GetNeighborTopHeight(x + 1, y, z, v110) < v110.Z)
-                {
-                    CreateFace(v100, v101, v111, v110, VertexIndex, Vertices, Triangles, Normals, UVs);
-                }
-
-                // -X face
-                if (GetVoxelAt(x - 1, y, z) == EVoxelType::Air ||
-                    GetNeighborTopHeight(x - 1, y, z, v010) < v010.Z ||
-                    GetNeighborTopHeight(x - 1, y, z, v011) < v011.Z ||
-                    GetNeighborTopHeight(x - 1, y, z, v001) < v001.Z ||
-                    GetNeighborTopHeight(x - 1, y, z, v000) < v000.Z)
-                {
-                    CreateFace(v010, v011, v001, v000, VertexIndex, Vertices, Triangles, Normals, UVs);
-                }
-
-                // +Y face
-                if (GetVoxelAt(x, y + 1, z) == EVoxelType::Air ||
-                    GetNeighborTopHeight(x, y + 1, z, v110) < v110.Z ||
-                    GetNeighborTopHeight(x, y + 1, z, v111) < v111.Z ||
-                    GetNeighborTopHeight(x, y + 1, z, v011) < v011.Z ||
-                    GetNeighborTopHeight(x, y + 1, z, v010) < v010.Z)
-                {
-                    CreateFace(v110, v111, v011, v010, VertexIndex, Vertices, Triangles, Normals, UVs);
-                }
-
-                // -Y face
-                if (GetVoxelAt(x, y - 1, z) == EVoxelType::Air ||
-                    GetNeighborTopHeight(x, y - 1, z, v000) < v000.Z ||
-                    GetNeighborTopHeight(x, y - 1, z, v001) < v001.Z ||
-                    GetNeighborTopHeight(x, y - 1, z, v101) < v101.Z ||
-                    GetNeighborTopHeight(x, y - 1, z, v100) < v100.Z)
-                {
-                    CreateFace(v000, v001, v101, v100, VertexIndex, Vertices, Triangles, Normals, UVs);
-                }
-            }
-        }
-    }
-
-    if (Vertices.Num() == 0) return;
-
-    // Build UDynamicMesh
-    UDynamicMesh* NewDynamicMesh = NewObject<UDynamicMesh>(this);
-    NewDynamicMesh->EditMesh([&](FDynamicMesh3& MeshOut)
+    UDynamicMesh* NewMesh = NewObject<UDynamicMesh>(this);
+    NewMesh->EditMesh([&](FDynamicMesh3& MeshOut)
         {
             MeshOut.Clear();
             MeshOut.EnableAttributes();
@@ -330,44 +236,219 @@ void ASmoothVoxelTerrain::CreateMesh()
             FDynamicMeshNormalOverlay* NormalOverlay = Attr->PrimaryNormals();
             if (!UVOverlay || !NormalOverlay) return;
 
-            TArray<int32> VertexIDs;
-            VertexIDs.Reserve(Vertices.Num());
-            for (const FVector& V : Vertices)
-                VertexIDs.Add(MeshOut.AppendVertex(FVector3d(V.X, V.Y, V.Z)));
-
-            TArray<int32> NormalElemIDs, UVElemIDs;
-            NormalElemIDs.Reserve(Vertices.Num());
-            UVElemIDs.Reserve(Vertices.Num());
-            for (int32 i = 0; i < Vertices.Num(); ++i)
+            // Build all voxels
+            for (int32 x = 0; x < ChunkSize; x++)
             {
-                NormalElemIDs.Add(NormalOverlay->AppendElement(FVector3f(Normals[i])));
-                UVElemIDs.Add(UVOverlay->AppendElement(FVector2f(UVs[i].X, UVs[i].Y)));
-            }
-
-            for (int32 i = 0; i < Triangles.Num(); i += 3)
-            {
-                int32 v0 = VertexIDs[Triangles[i]];
-                int32 v1 = VertexIDs[Triangles[i + 1]];
-                int32 v2 = VertexIDs[Triangles[i + 2]];
-                int32 TriID = MeshOut.AppendTriangle(v0, v1, v2);
-                if (TriID == FDynamicMesh3::InvalidID) continue;
-
-                NormalOverlay->SetTriangle(TriID, FIndex3i(NormalElemIDs[Triangles[i]],
-                    NormalElemIDs[Triangles[i + 1]],
-                    NormalElemIDs[Triangles[i + 2]]));
-                UVOverlay->SetTriangle(TriID, FIndex3i(UVElemIDs[Triangles[i]],
-                    UVElemIDs[Triangles[i + 1]],
-                    UVElemIDs[Triangles[i + 2]]));
+                for (int32 y = 0; y < ChunkSize; y++)
+                {
+                    for (int32 z = 0; z < MaxHeight; z++)
+                    {
+                        if (GetVoxelAt(x, y, z) == EVoxelType::Air) continue;
+                        int32 VoxelIdx = GetIndex(x, y, z);
+                        AppendVoxelFaces(x, y, z, MeshOut, VoxelTriangles[VoxelIdx]);
+                    }
+                }
             }
         });
 
-    MeshComponent->SetDynamicMesh(NewDynamicMesh);
+    MeshComponent->SetDynamicMesh(NewMesh);
     MeshComponent->UpdateCollision(true);
     if (TerrainMaterial) MeshComponent->SetMaterial(0, TerrainMaterial);
     MeshComponent->SetVisibility(true);
     bMeshBuilt = true;
 }
 
+// -------------------------------------------------------------------
+// Incremental Update – Rebuild a Voxel and its Face‑Neighbors
+// -------------------------------------------------------------------
+void ASmoothVoxelTerrain::UpdateVoxelRegion(int32 CenterX, int32 CenterY, int32 CenterZ)
+{
+    if (!MeshComponent || !MeshComponent->GetDynamicMesh())
+        return;
+
+    // Collect affected voxel indices (center + 6 face neighbors)
+    TSet<int32> AffectedIndices;
+    AffectedIndices.Add(GetIndex(CenterX, CenterY, CenterZ));
+
+    const FIntVector Neighbors[6] = {
+        FIntVector(1, 0, 0), FIntVector(-1, 0, 0),
+        FIntVector(0, 1, 0), FIntVector(0,-1, 0),
+        FIntVector(0, 0, 1), FIntVector(0, 0,-1)
+    };
+    for (const auto& Off : Neighbors)
+    {
+        int32 nx = CenterX + Off.X, ny = CenterY + Off.Y, nz = CenterZ + Off.Z;
+        if (nx >= 0 && nx < ChunkSize && ny >= 0 && ny < ChunkSize && nz >= 0 && nz < MaxHeight)
+            AffectedIndices.Add(GetIndex(nx, ny, nz));
+    }
+
+    // Edit the existing dynamic mesh
+    MeshComponent->GetDynamicMesh()->EditMesh([&](FDynamicMesh3& MeshOut)
+        {
+            // 1. Remove old triangles of affected voxels
+            for (int32 Idx : AffectedIndices)
+            {
+                for (int32 TriID : VoxelTriangles[Idx])
+                {
+                    if (MeshOut.IsTriangle(TriID))
+                        MeshOut.RemoveTriangle(TriID, true, false); // remove, keep orphaned vertices
+                }
+                VoxelTriangles[Idx].Empty();
+            }
+
+            // 2. Regenerate faces for affected voxels (only if not air)
+            for (int32 Idx : AffectedIndices)
+            {
+                int32 x, y, z;
+                IndexToXYZ(Idx, x, y, z);
+                if (GetVoxelAt(x, y, z) != EVoxelType::Air)
+                {
+                    AppendVoxelFaces(x, y, z, MeshOut, VoxelTriangles[Idx]);
+                }
+            }
+        });
+
+    // Update collision and notify
+    //MeshComponent->NotifyMeshUpdated();
+    //MeshComponent->UpdateCollision(true);
+}
+
+// -------------------------------------------------------------------
+// Append a Single Voxel’s Faces to a Dynamic Mesh
+// -------------------------------------------------------------------
+void ASmoothVoxelTerrain::AppendVoxelFaces(int32 x, int32 y, int32 z, FDynamicMesh3& Mesh, TArray<int32>& OutTriIDs)
+{
+    // Cache attribute overlays
+    FDynamicMeshAttributeSet* Attr = Mesh.Attributes();
+    if (!Attr) return;
+    FDynamicMeshUVOverlay* UVOverlay = Attr->GetUVLayer(0);
+    FDynamicMeshNormalOverlay* NormalOverlay = Attr->PrimaryNormals();
+    if (!UVOverlay || !NormalOverlay) return;
+
+    // Precompute the 8 corners (same as before)
+    FVector v000 = GetSmoothVertex(x, y, z, x, y, z);
+    FVector v100 = GetSmoothVertex(x + 1, y, z, x, y, z);
+    FVector v010 = GetSmoothVertex(x, y + 1, z, x, y, z);
+    FVector v110 = GetSmoothVertex(x + 1, y + 1, z, x, y, z);
+    FVector v001 = GetSmoothVertex(x, y, z + 1, x, y, z);
+    FVector v101 = GetSmoothVertex(x + 1, y, z + 1, x, y, z);
+    FVector v011 = GetSmoothVertex(x, y + 1, z + 1, x, y, z);
+    FVector v111 = GetSmoothVertex(x + 1, y + 1, z + 1, x, y, z);
+
+    // Lambda to add a quad (two triangles) with normals and UVs
+    auto AddQuad = [&](const FVector& A, const FVector& B, const FVector& C, const FVector& D,
+        const FVector& NormalA, const FVector& NormalB, const FVector& NormalC, const FVector& NormalD,
+        const FVector2D& UV_A, const FVector2D& UV_B, const FVector2D& UV_C, const FVector2D& UV_D)
+        {
+            int32 vA = Mesh.AppendVertex(FVector3d(A));
+            int32 vB = Mesh.AppendVertex(FVector3d(B));
+            int32 vC = Mesh.AppendVertex(FVector3d(C));
+            int32 vD = Mesh.AppendVertex(FVector3d(D));
+
+            // Triangle 1: A-B-C
+            int32 t1 = Mesh.AppendTriangle(vA, vB, vC);
+            if (t1 != FDynamicMesh3::InvalidID)
+            {
+                OutTriIDs.Add(t1);
+                // Set normal overlay elements
+                int32 nA = NormalOverlay->AppendElement(FVector3f(NormalA));
+                int32 nB = NormalOverlay->AppendElement(FVector3f(NormalB));
+                int32 nC = NormalOverlay->AppendElement(FVector3f(NormalC));
+                NormalOverlay->SetTriangle(t1, FIndex3i(nA, nB, nC));
+                // Set UV overlay
+                int32 uvA = UVOverlay->AppendElement(FVector2f(UV_A));
+                int32 uvB = UVOverlay->AppendElement(FVector2f(UV_B));
+                int32 uvC = UVOverlay->AppendElement(FVector2f(UV_C));
+                UVOverlay->SetTriangle(t1, FIndex3i(uvA, uvB, uvC));
+            }
+
+            // Triangle 2: A-C-D
+            int32 t2 = Mesh.AppendTriangle(vA, vC, vD);
+            if (t2 != FDynamicMesh3::InvalidID)
+            {
+                OutTriIDs.Add(t2);
+                int32 nA = NormalOverlay->AppendElement(FVector3f(NormalA));
+                int32 nC = NormalOverlay->AppendElement(FVector3f(NormalC));
+                int32 nD = NormalOverlay->AppendElement(FVector3f(NormalD));
+                NormalOverlay->SetTriangle(t2, FIndex3i(nA, nC, nD));
+                int32 uvA = UVOverlay->AppendElement(FVector2f(UV_A));
+                int32 uvC = UVOverlay->AppendElement(FVector2f(UV_C));
+                int32 uvD = UVOverlay->AppendElement(FVector2f(UV_D));
+                UVOverlay->SetTriangle(t2, FIndex3i(uvA, uvC, uvD));
+            }
+        };
+
+    // Helper for faces where all four normals are the same
+    auto AddQuadFlat = [&](const FVector& A, const FVector& B, const FVector& C, const FVector& D, const FVector& Normal)
+        {
+            AddQuad(A, B, C, D, Normal, Normal, Normal, Normal,
+                FVector2D(0, 1), FVector2D(0, 0), FVector2D(1, 0), FVector2D(1, 1));
+        };
+
+    // Top face (+Z)
+    if (GetVoxelAt(x, y, z + 1) == EVoxelType::Air)
+    {
+        if (bSmoothTerrain)
+        {
+            AddQuad(v001, v011, v111, v101,
+                GetSmoothNormal(x, y), GetSmoothNormal(x, y + 1),
+                GetSmoothNormal(x + 1, y + 1), GetSmoothNormal(x + 1, y),
+                FVector2D(0, 1), FVector2D(0, 0), FVector2D(1, 0), FVector2D(1, 1));
+        }
+        else
+        {
+            AddQuadFlat(v001, v011, v111, v101, FVector::UpVector);
+        }
+    }
+
+    // Bottom face (-Z)
+    if (GetVoxelAt(x, y, z - 1) == EVoxelType::Air)
+        AddQuadFlat(v100, v110, v010, v000, FVector::DownVector);
+
+    // +X face
+    if (GetVoxelAt(x + 1, y, z) == EVoxelType::Air ||
+        GetNeighborTopHeight(x + 1, y, z, v100) < v100.Z ||
+        GetNeighborTopHeight(x + 1, y, z, v101) < v101.Z ||
+        GetNeighborTopHeight(x + 1, y, z, v111) < v111.Z ||
+        GetNeighborTopHeight(x + 1, y, z, v110) < v110.Z)
+    {
+        AddQuadFlat(v100, v101, v111, v110, FVector::RightVector);
+    }
+
+    // -X face
+    if (GetVoxelAt(x - 1, y, z) == EVoxelType::Air ||
+        GetNeighborTopHeight(x - 1, y, z, v010) < v010.Z ||
+        GetNeighborTopHeight(x - 1, y, z, v011) < v011.Z ||
+        GetNeighborTopHeight(x - 1, y, z, v001) < v001.Z ||
+        GetNeighborTopHeight(x - 1, y, z, v000) < v000.Z)
+    {
+        AddQuadFlat(v010, v011, v001, v000, FVector::LeftVector);
+    }
+
+    // +Y face
+    if (GetVoxelAt(x, y + 1, z) == EVoxelType::Air ||
+        GetNeighborTopHeight(x, y + 1, z, v110) < v110.Z ||
+        GetNeighborTopHeight(x, y + 1, z, v111) < v111.Z ||
+        GetNeighborTopHeight(x, y + 1, z, v011) < v011.Z ||
+        GetNeighborTopHeight(x, y + 1, z, v010) < v010.Z)
+    {
+        AddQuadFlat(v110, v111, v011, v010, FVector::ForwardVector);
+    }
+
+    // -Y face
+    if (GetVoxelAt(x, y - 1, z) == EVoxelType::Air ||
+        GetNeighborTopHeight(x, y - 1, z, v000) < v000.Z ||
+        GetNeighborTopHeight(x, y - 1, z, v001) < v001.Z ||
+        GetNeighborTopHeight(x, y - 1, z, v101) < v101.Z ||
+        GetNeighborTopHeight(x, y - 1, z, v100) < v100.Z)
+    {
+        AddQuadFlat(v000, v001, v101, v100, FVector::BackwardVector);
+    }
+}
+
+// -------------------------------------------------------------------
+// Legacy CreateFace (kept for compatibility, not used)
+// -------------------------------------------------------------------
 void ASmoothVoxelTerrain::CreateFace(FVector p1, FVector p2, FVector p3, FVector p4, int32& VertexIdx,
     TArray<FVector>& Verts, TArray<int32>& Tris, TArray<FVector>& Norms, TArray<FVector2D>& UVs)
 {
@@ -375,28 +456,22 @@ void ASmoothVoxelTerrain::CreateFace(FVector p1, FVector p2, FVector p3, FVector
         {
             return FVector::CrossProduct(b - a, c - a).Size() * 0.5f;
         };
-
     float area1 = TriangleArea(p1, p2, p3);
     float area2 = TriangleArea(p1, p3, p4);
     if ((area1 + area2) < 0.001f) return;
 
     FVector Normal = FVector::CrossProduct(p4 - p1, p2 - p1).GetSafeNormal();
-
     Verts.Add(p1); Verts.Add(p2); Verts.Add(p3); Verts.Add(p4);
-
     Tris.Add(VertexIdx); Tris.Add(VertexIdx + 1); Tris.Add(VertexIdx + 2);
     Tris.Add(VertexIdx); Tris.Add(VertexIdx + 2); Tris.Add(VertexIdx + 3);
-
     for (int i = 0; i < 4; i++) Norms.Add(Normal);
-
     UVs.Add(FVector2D(0, 1)); UVs.Add(FVector2D(0, 0));
     UVs.Add(FVector2D(1, 0)); UVs.Add(FVector2D(1, 1));
-
     VertexIdx += 4;
 }
 
 // -------------------------------------------------------------------
-// Voxel Editing (unchanged, except Mesh -> MeshComponent)
+// Voxel Editing – Now using Incremental Update
 // -------------------------------------------------------------------
 void ASmoothVoxelTerrain::RemoveVoxel(FVector WorldLocation)
 {
@@ -422,20 +497,11 @@ void ASmoothVoxelTerrain::RemoveVoxel(FVector WorldLocation)
     }
 
     int32 Index = GetIndex(x, y, z);
-    if (!VoxelData.IsValidIndex(Index))
-    {
-        UE_LOG(LogTemp, Warning, TEXT("RemoveVoxel: Invalid index %d"), Index);
+    if (!VoxelData.IsValidIndex(Index) || VoxelData[Index] == EVoxelType::Air)
         return;
-    }
-
-    if (VoxelData[Index] == EVoxelType::Air)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("RemoveVoxel: Voxel is already air – nothing to remove."));
-        return;
-    }
 
     VoxelData[Index] = EVoxelType::Air;
-    CreateMesh();
+    UpdateVoxelRegion(x, y, z);
 }
 
 void ASmoothVoxelTerrain::PlaceVoxel(FVector WorldLocation, EVoxelType Type)
@@ -456,14 +522,17 @@ void ASmoothVoxelTerrain::PlaceVoxel(FVector WorldLocation, EVoxelType Type)
     }
 
     int32 Index = GetIndex(x, y, z);
-    if (!VoxelData.IsValidIndex(Index))
-    {
-        UE_LOG(LogTemp, Warning, TEXT("PlaceVoxel: invalid index %d"), Index);
+    if (!VoxelData.IsValidIndex(Index) || VoxelData[Index] == Type)
         return;
-    }
-
-    if (VoxelData[Index] == Type) return;
 
     VoxelData[Index] = Type;
+    UpdateVoxelRegion(x, y, z);
+}
+
+void ASmoothVoxelTerrain::RebuildTerrain()
+{
+    if (bIsDestroyed || !MeshComponent || !IsValid(MeshComponent) || !GetWorld() || GetWorld()->bIsTearingDown || IsActorBeingDestroyed())
+        return;
+    GenerateVoxelData();
     CreateMesh();
 }
