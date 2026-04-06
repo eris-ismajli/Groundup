@@ -54,7 +54,7 @@ void ASmoothVoxelTerrain::BeginPlay()
 void ASmoothVoxelTerrain::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
-    UpdateCollisionIfNeeded();
+    //UpdateCollisionIfNeeded();
 }
 
 void ASmoothVoxelTerrain::UpdateCollisionIfNeeded()
@@ -227,10 +227,10 @@ void ASmoothVoxelTerrain::FVoxelChunk::BuildMesh(ASmoothVoxelTerrain* TerrainOwn
             }
         });
 
-    MeshComponent->NotifyMeshUpdated();
-    MeshComponent->UpdateCollision(true);
+    //MeshComponent->NotifyMeshUpdated();
+    //MeshComponent->UpdateCollision(true);
     // Force render state recreation
-    MeshComponent->MarkRenderStateDirty();
+    //MeshComponent->MarkRenderStateDirty();
     // Re-register component to ensure it's in the scene
     if (MeshComponent->IsRegistered())
         MeshComponent->ReregisterComponent();
@@ -250,9 +250,9 @@ void ASmoothVoxelTerrain::FVoxelChunk::UpdateSharedFace(int32 LocalX, int32 Loca
             AddVoxelFaces(LocalX, LocalY, LocalZ, MeshOut, TerrainOwner);
         });
 
-    MeshComponent->NotifyMeshUpdated();
-    MeshComponent->MarkRenderStateDirty();
-    TerrainOwner->bCollisionDirty = true;
+    //MeshComponent->NotifyMeshUpdated();
+    //MeshComponent->MarkRenderStateDirty();
+    //TerrainOwner->bCollisionDirty = true;
 }
 
 //void ASmoothVoxelTerrain::FVoxelChunk::UpdateVoxel(int32 LocalX, int32 LocalY, int32 LocalZ, EVoxelType NewType, ASmoothVoxelTerrain* TerrainOwner)
@@ -772,9 +772,9 @@ void ASmoothVoxelTerrain::FVoxelChunk::UpdateVoxelMesh(int32 LocalX, int32 Local
             }
         });
 
-    MeshComponent->NotifyMeshUpdated();
-    MeshComponent->MarkRenderStateDirty();
-    TerrainOwner->bCollisionDirty = true;
+    //MeshComponent->NotifyMeshUpdated();
+    //MeshComponent->MarkRenderStateDirty();
+    //TerrainOwner->bCollisionDirty = true;
 }
 
 void ASmoothVoxelTerrain::FVoxelChunk::RemoveVoxelFaces(int32 LocalX, int32 LocalY, int32 LocalZ, FDynamicMesh3& Mesh, ASmoothVoxelTerrain* TerrainOwner)
