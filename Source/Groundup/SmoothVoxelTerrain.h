@@ -135,5 +135,8 @@ private:
     FVoxelChunk* GetChunk(const FIntVector& Coord);
     const FVoxelChunk* GetChunk(const FIntVector& Coord) const;
 
+    void RebuildNeighbors(const FIntVector& ChunkCoord, int32 lx, int32 ly, int32 lz);
+
+
     bool bIsDestroyed = false;
 };

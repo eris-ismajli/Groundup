@@ -43,8 +43,12 @@ void ASmoothVoxelTerrain::OnConstruction(const FTransform& Transform)
 void ASmoothVoxelTerrain::BeginPlay()
 {
     Super::BeginPlay();
-    if (bIsDestroyed) return;
-    RebuildTerrain();
+
+    // Only generate if we don't have chunks, or if we are in a fresh game state
+    if (Chunks.Num() == 0)
+    {
+        RebuildTerrain();
+    }
 }
 
 void ASmoothVoxelTerrain::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -66,13 +70,26 @@ void ASmoothVoxelTerrain::EndPlay(const EEndPlayReason::Type EndPlayReason)
 // -------------------------------------------------------------------
 void ASmoothVoxelTerrain::GenerateChunks()
 {
-    // Remove old chunks
+    // 1. Properly Unregister and Destroy old components
     for (auto& Pair : Chunks)
     {
-        if (Pair.Value->MeshComponent)
+        if (Pair.Value && Pair.Value->MeshComponent)
+        {
+            // This is critical: Unregister before destroying
+            Pair.Value->MeshComponent->UnregisterComponent();
             Pair.Value->MeshComponent->DestroyComponent();
+        }
     }
     Chunks.Empty();
+
+    // 2. Also clear any "stray" DynamicMeshComponents that might be hanging around
+    TArray<UDynamicMeshComponent*> OldComps;
+    GetComponents<UDynamicMeshComponent>(OldComps);
+    for (UDynamicMeshComponent* Comp : OldComps)
+    {
+        Comp->UnregisterComponent();
+        Comp->DestroyComponent();
+    }
 
     // Create chunks in a grid
     for (int32 cx = 0; cx < WorldChunksX; ++cx)
@@ -120,6 +137,7 @@ void ASmoothVoxelTerrain::GenerateChunks()
 
             // Create mesh component
             UDynamicMeshComponent* MeshComp = NewObject<UDynamicMeshComponent>(this);
+            MeshComp->CreationMethod = EComponentCreationMethod::UserConstructionScript;
             MeshComp->AttachToComponent(RootSceneComponent, FAttachmentTransformRules::KeepRelativeTransform);
             MeshComp->SetRelativeTransform(FTransform::Identity); // since Root is already at actor transform
             MeshComp->RegisterComponent();
@@ -158,8 +176,10 @@ void ASmoothVoxelTerrain::FVoxelChunk::BuildMesh(ASmoothVoxelTerrain* TerrainOwn
 {
     if (!MeshComponent) return;
 
-    UDynamicMesh* NewMesh = NewObject<UDynamicMesh>(MeshComponent);
-    NewMesh->EditMesh([&](FDynamicMesh3& MeshOut)
+    UDynamicMesh* DynamicMesh = MeshComponent->GetDynamicMesh();
+
+
+    DynamicMesh->EditMesh([&](FDynamicMesh3& MeshOut)
         {
             MeshOut.Clear();
             MeshOut.EnableAttributes();
@@ -188,7 +208,7 @@ void ASmoothVoxelTerrain::FVoxelChunk::BuildMesh(ASmoothVoxelTerrain* TerrainOwn
             }
         });
 
-    MeshComponent->SetDynamicMesh(NewMesh);
+    MeshComponent->NotifyMeshUpdated();
     MeshComponent->UpdateCollision(true);
     // Force render state recreation
     MeshComponent->MarkRenderStateDirty();
@@ -202,8 +222,13 @@ void ASmoothVoxelTerrain::FVoxelChunk::BuildMesh(ASmoothVoxelTerrain* TerrainOwn
 void ASmoothVoxelTerrain::FVoxelChunk::UpdateVoxel(int32 LocalX, int32 LocalY, int32 LocalZ, EVoxelType NewType, ASmoothVoxelTerrain* TerrainOwner)
 {
     int32 Index = LocalX + LocalY * TerrainOwner->ChunkSize + LocalZ * TerrainOwner->ChunkSize * TerrainOwner->ChunkSize;
+
+    UE_LOG(LogTemp, Warning, TEXT("Updating voxel: Local (%d,%d,%d), Index=%d, Old=%d, New=%d"),
+        LocalX, LocalY, LocalZ, Index, (int)VoxelData[Index], (int)NewType);
+
     if (VoxelData[Index] == NewType) return;
     VoxelData[Index] = NewType;
+
     BuildMesh(TerrainOwner);
 }
 
