@@ -245,10 +245,14 @@ void ASmoothVoxelTerrain::RemoveVoxel(FVector WorldLocation)
 
     int32 lx, ly, lz;
     WorldToLocalVoxel(WorldLocation, ChunkCoord, lx, ly, lz);
+  
     if (lx < 0 || lx >= ChunkSize || ly < 0 || ly >= ChunkSize || lz < 0 || lz >= MaxHeight) return;
 
     int32 Index = lx + ly * ChunkSize + lz * ChunkSize * ChunkSize;
-    if (Chunk->VoxelData[Index] == EVoxelType::Air) return;
+    if (Chunk->VoxelData[Index] == EVoxelType::Air) {
+        UE_LOG(LogTemp, Warning, TEXT("tried removing air"));
+        return;
+    };
 
     UE_LOG(LogTemp, Warning, TEXT("Removing voxel at chunk (%d,%d) local (%d,%d,%d)"),
         ChunkCoord.X, ChunkCoord.Y, lx, ly, lz);
@@ -487,8 +491,6 @@ void ASmoothVoxelTerrain::AppendVoxelFacesWorld(int32 WorldX, int32 WorldY, int3
             return FVector2D(U, V);
         };
 
-    // Helper: compute geometric normal of a triangle (vA,vB,vC)
-// Flip the cross product operands to point outward
     auto ComputeTriangleNormal = [](const FVector& A, const FVector& B, const FVector& C) -> FVector
         {
             // Changed from (B-A, C-A) to (C-A, B-A)
