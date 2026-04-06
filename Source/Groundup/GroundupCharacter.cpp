@@ -140,24 +140,28 @@ void AGroundupCharacter::BreakCube()
 		ASmoothVoxelTerrain* HitTerrain = Cast<ASmoothVoxelTerrain>(HitResult.GetActor());
 		if (HitTerrain)
 		{
+			// Nudge the impact point inward along the hit normal to avoid boundary ambiguity
+			const float Nudge = HitTerrain->CubeSize * 0.01f;
+			FVector AdjustedPoint = HitResult.ImpactPoint - HitResult.ImpactNormal * Nudge;
+
 			int32 VoxelX, VoxelY, VoxelZ;
 			EVoxelType VoxelType;
 
-			if (HitTerrain->GetVoxelAtWorldPoint(HitResult.ImpactPoint, VoxelX, VoxelY, VoxelZ, &VoxelType))
+			if (HitTerrain->GetVoxelAtWorldPoint(AdjustedPoint, VoxelX, VoxelY, VoxelZ, &VoxelType))
 			{
-				// If we hit air, check the voxel directly below
-				if (VoxelType == EVoxelType::Air)
+				bool bIsTopFace = (HitResult.ImpactNormal.Z > 0.7f); // roughly upward
+
+				// Auto‑assist only when clicking the top face AND hitting air
+				if (bIsTopFace && VoxelType == EVoxelType::Air)
 				{
-					// Look one step down
+					// Check the voxel directly below
 					int32 BelowX = VoxelX;
 					int32 BelowY = VoxelY;
 					int32 BelowZ = VoxelZ - 1;
 
-					// Get the voxel type at that position (if valid)
 					EVoxelType BelowType = HitTerrain->GetVoxelAtWorld(BelowX, BelowY, BelowZ);
 					if (BelowType != EVoxelType::Air)
 					{
-						// Use the below voxel instead
 						VoxelX = BelowX;
 						VoxelY = BelowY;
 						VoxelZ = BelowZ;
@@ -165,15 +169,13 @@ void AGroundupCharacter::BreakCube()
 					}
 					else
 					{
-						// No solid voxel below – nothing to remove
-						return;
+						return; // nothing to break
 					}
 				}
 
-				// At this point VoxelType is guaranteed not to be Air
+				// Only break if we now have a solid voxel
 				if (VoxelType != EVoxelType::Air)
 				{
-					// Compute world‑space center of the (possibly adjusted) voxel
 					FVector LocalCenter(
 						VoxelX * HitTerrain->CubeSize + HitTerrain->CubeSize * 0.5f,
 						VoxelY * HitTerrain->CubeSize + HitTerrain->CubeSize * 0.5f,
