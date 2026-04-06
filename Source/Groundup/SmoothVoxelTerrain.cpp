@@ -453,7 +453,7 @@ void ASmoothVoxelTerrain::AppendVoxelFacesWorld(int32 WorldX, int32 WorldY, int3
     FDynamicMeshNormalOverlay* NormalOverlay = Attr->PrimaryNormals();
     if (!UVOverlay || !NormalOverlay) return;
 
-    // Compute 8 corners using world coordinates
+    // 8 corners (world coordinates)
     FVector v000 = GetSmoothVertexWorld(WorldX, WorldY, WorldZ, WorldX, WorldY, WorldZ);
     FVector v100 = GetSmoothVertexWorld(WorldX + 1, WorldY, WorldZ, WorldX, WorldY, WorldZ);
     FVector v010 = GetSmoothVertexWorld(WorldX, WorldY + 1, WorldZ, WorldX, WorldY, WorldZ);
@@ -463,49 +463,85 @@ void ASmoothVoxelTerrain::AppendVoxelFacesWorld(int32 WorldX, int32 WorldY, int3
     FVector v011 = GetSmoothVertexWorld(WorldX, WorldY + 1, WorldZ + 1, WorldX, WorldY, WorldZ);
     FVector v111 = GetSmoothVertexWorld(WorldX + 1, WorldY + 1, WorldZ + 1, WorldX, WorldY, WorldZ);
 
-    // Lambda to add a quad (two triangles) with normals and UVs
-    auto AddQuad = [&](const FVector& A, const FVector& B, const FVector& C, const FVector& D,
-        const FVector& NormalA, const FVector& NormalB, const FVector& NormalC, const FVector& NormalD,
-        const FVector2D& UV_A, const FVector2D& UV_B, const FVector2D& UV_C, const FVector2D& UV_D)
+    // Helper: compute UVs from world position and a face normal
+    auto GetUVForVertex = [&](const FVector& Pos, const FVector& FaceNormal) -> FVector2D
         {
+            // Choose projection axes based on the dominant face normal
+            FVector AbsN = FaceNormal.GetAbs();
+            float U, V;
+            if (AbsN.Z > 0.9f)          // top/bottom → use X,Y
+            {
+                U = Pos.X * TextureScale;
+                V = Pos.Y * TextureScale;
+            }
+            else if (AbsN.X > 0.9f)      // X‑facing side → use Y,Z
+            {
+                U = Pos.Y * TextureScale;
+                V = Pos.Z * TextureScale;
+            }
+            else                         // Y‑facing side → use X,Z
+            {
+                U = Pos.X * TextureScale;
+                V = Pos.Z * TextureScale;
+            }
+            return FVector2D(U, V);
+        };
+
+    // Helper: compute geometric normal of a triangle (vA,vB,vC)
+// Flip the cross product operands to point outward
+    auto ComputeTriangleNormal = [](const FVector& A, const FVector& B, const FVector& C) -> FVector
+        {
+            // Changed from (B-A, C-A) to (C-A, B-A)
+            return FVector::CrossProduct(C - A, B - A).GetSafeNormal();
+        };
+
+    // Helper: add a quad with world‑based UVs and per‑triangle geometric normals
+    auto AddQuadWorld = [&](const FVector& A, const FVector& B, const FVector& C, const FVector& D,
+        const FVector& FaceNormal)
+        {
+            FVector2D uvA = GetUVForVertex(A, FaceNormal);
+            FVector2D uvB = GetUVForVertex(B, FaceNormal);
+            FVector2D uvC = GetUVForVertex(C, FaceNormal);
+            FVector2D uvD = GetUVForVertex(D, FaceNormal);
+
             int32 vA = Mesh.AppendVertex(FVector3d(A));
             int32 vB = Mesh.AppendVertex(FVector3d(B));
             int32 vC = Mesh.AppendVertex(FVector3d(C));
             int32 vD = Mesh.AppendVertex(FVector3d(D));
 
+            // Triangle 1 (A,B,C)
+            FVector n1 = ComputeTriangleNormal(A, B, C);
             int32 t1 = Mesh.AppendTriangle(vA, vB, vC);
             if (t1 != FDynamicMesh3::InvalidID)
             {
                 OutTriIDs.Add(t1);
-                int32 nA = NormalOverlay->AppendElement(FVector3f(NormalA));
-                int32 nB = NormalOverlay->AppendElement(FVector3f(NormalB));
-                int32 nC = NormalOverlay->AppendElement(FVector3f(NormalC));
-                NormalOverlay->SetTriangle(t1, FIndex3i(nA, nB, nC));
-                int32 uvA = UVOverlay->AppendElement(FVector2f(UV_A));
-                int32 uvB = UVOverlay->AppendElement(FVector2f(UV_B));
-                int32 uvC = UVOverlay->AppendElement(FVector2f(UV_C));
-                UVOverlay->SetTriangle(t1, FIndex3i(uvA, uvB, uvC));
+                int32 nA1 = NormalOverlay->AppendElement(FVector3f(n1));
+                int32 nB1 = NormalOverlay->AppendElement(FVector3f(n1));
+                int32 nC1 = NormalOverlay->AppendElement(FVector3f(n1));
+                NormalOverlay->SetTriangle(t1, FIndex3i(nA1, nB1, nC1));
+
+                int32 uvA1 = UVOverlay->AppendElement(FVector2f(uvA));
+                int32 uvB1 = UVOverlay->AppendElement(FVector2f(uvB));
+                int32 uvC1 = UVOverlay->AppendElement(FVector2f(uvC));
+                UVOverlay->SetTriangle(t1, FIndex3i(uvA1, uvB1, uvC1));
             }
 
+            // Triangle 2 (A,C,D)
+            FVector n2 = ComputeTriangleNormal(A, C, D);
             int32 t2 = Mesh.AppendTriangle(vA, vC, vD);
             if (t2 != FDynamicMesh3::InvalidID)
             {
                 OutTriIDs.Add(t2);
-                int32 nA = NormalOverlay->AppendElement(FVector3f(NormalA));
-                int32 nC = NormalOverlay->AppendElement(FVector3f(NormalC));
-                int32 nD = NormalOverlay->AppendElement(FVector3f(NormalD));
-                NormalOverlay->SetTriangle(t2, FIndex3i(nA, nC, nD));
-                int32 uvA = UVOverlay->AppendElement(FVector2f(UV_A));
-                int32 uvC = UVOverlay->AppendElement(FVector2f(UV_C));
-                int32 uvD = UVOverlay->AppendElement(FVector2f(UV_D));
-                UVOverlay->SetTriangle(t2, FIndex3i(uvA, uvC, uvD));
-            }
-        };
+                int32 nA2 = NormalOverlay->AppendElement(FVector3f(n2));
+                int32 nC2 = NormalOverlay->AppendElement(FVector3f(n2));
+                int32 nD2 = NormalOverlay->AppendElement(FVector3f(n2));
+                NormalOverlay->SetTriangle(t2, FIndex3i(nA2, nC2, nD2));
 
-    auto AddQuadFlat = [&](const FVector& A, const FVector& B, const FVector& C, const FVector& D, const FVector& Normal)
-        {
-            AddQuad(A, B, C, D, Normal, Normal, Normal, Normal,
-                FVector2D(0, 1), FVector2D(0, 0), FVector2D(1, 0), FVector2D(1, 1));
+                int32 uvA2 = UVOverlay->AppendElement(FVector2f(uvA));
+                int32 uvC2 = UVOverlay->AppendElement(FVector2f(uvC));
+                int32 uvD2 = UVOverlay->AppendElement(FVector2f(uvD));
+                UVOverlay->SetTriangle(t2, FIndex3i(uvA2, uvC2, uvD2));
+            }
         };
 
     // Top face (+Z)
@@ -513,22 +549,65 @@ void ASmoothVoxelTerrain::AppendVoxelFacesWorld(int32 WorldX, int32 WorldY, int3
     {
         if (bSmoothTerrain)
         {
-            AddQuad(v001, v011, v111, v101,
-                GetSmoothNormalWorld(WorldX, WorldY),
-                GetSmoothNormalWorld(WorldX, WorldY + 1),
-                GetSmoothNormalWorld(WorldX + 1, WorldY + 1),
-                GetSmoothNormalWorld(WorldX + 1, WorldY),
-                FVector2D(0, 1), FVector2D(0, 0), FVector2D(1, 0), FVector2D(1, 1));
+            // Use smooth normals from heightfield for top face
+            // We still need per‑vertex normals, so we'll add the quad with explicit normals
+            FVector n00 = GetSmoothNormalWorld(WorldX, WorldY);
+            FVector n10 = GetSmoothNormalWorld(WorldX + 1, WorldY);
+            FVector n01 = GetSmoothNormalWorld(WorldX, WorldY + 1);
+            FVector n11 = GetSmoothNormalWorld(WorldX + 1, WorldY + 1);
+
+            // Add quad with custom normals (keep world UVs)
+            auto AddTopQuadSmooth = [&](const FVector& A, const FVector& B, const FVector& C, const FVector& D,
+                const FVector& nA, const FVector& nB, const FVector& nC, const FVector& nD)
+                {
+                    FVector2D uvA = GetUVForVertex(A, FVector::UpVector);
+                    FVector2D uvB = GetUVForVertex(B, FVector::UpVector);
+                    FVector2D uvC = GetUVForVertex(C, FVector::UpVector);
+                    FVector2D uvD = GetUVForVertex(D, FVector::UpVector);
+
+                    int32 vA = Mesh.AppendVertex(FVector3d(A));
+                    int32 vB = Mesh.AppendVertex(FVector3d(B));
+                    int32 vC = Mesh.AppendVertex(FVector3d(C));
+                    int32 vD = Mesh.AppendVertex(FVector3d(D));
+
+                    int32 t1 = Mesh.AppendTriangle(vA, vB, vC);
+                    if (t1 != FDynamicMesh3::InvalidID)
+                    {
+                        OutTriIDs.Add(t1);
+                        int32 nA1 = NormalOverlay->AppendElement(FVector3f(nA));
+                        int32 nB1 = NormalOverlay->AppendElement(FVector3f(nB));
+                        int32 nC1 = NormalOverlay->AppendElement(FVector3f(nC));
+                        NormalOverlay->SetTriangle(t1, FIndex3i(nA1, nB1, nC1));
+                        int32 uvA1 = UVOverlay->AppendElement(FVector2f(uvA));
+                        int32 uvB1 = UVOverlay->AppendElement(FVector2f(uvB));
+                        int32 uvC1 = UVOverlay->AppendElement(FVector2f(uvC));
+                        UVOverlay->SetTriangle(t1, FIndex3i(uvA1, uvB1, uvC1));
+                    }
+                    int32 t2 = Mesh.AppendTriangle(vA, vC, vD);
+                    if (t2 != FDynamicMesh3::InvalidID)
+                    {
+                        OutTriIDs.Add(t2);
+                        int32 nA2 = NormalOverlay->AppendElement(FVector3f(nA));
+                        int32 nC2 = NormalOverlay->AppendElement(FVector3f(nC));
+                        int32 nD2 = NormalOverlay->AppendElement(FVector3f(nD));
+                        NormalOverlay->SetTriangle(t2, FIndex3i(nA2, nC2, nD2));
+                        int32 uvA2 = UVOverlay->AppendElement(FVector2f(uvA));
+                        int32 uvC2 = UVOverlay->AppendElement(FVector2f(uvC));
+                        int32 uvD2 = UVOverlay->AppendElement(FVector2f(uvD));
+                        UVOverlay->SetTriangle(t2, FIndex3i(uvA2, uvC2, uvD2));
+                    }
+                };
+            AddTopQuadSmooth(v001, v011, v111, v101, n00, n01, n11, n10);
         }
         else
         {
-            AddQuadFlat(v001, v011, v111, v101, FVector::UpVector);
+            AddQuadWorld(v001, v011, v111, v101, FVector::UpVector);
         }
     }
 
     // Bottom face (-Z)
     if (GetVoxelAtWorld(WorldX, WorldY, WorldZ - 1) == EVoxelType::Air)
-        AddQuadFlat(v100, v110, v010, v000, FVector::DownVector);
+        AddQuadWorld(v100, v110, v010, v000, FVector::DownVector);
 
     // +X face
     if (GetVoxelAtWorld(WorldX + 1, WorldY, WorldZ) == EVoxelType::Air ||
@@ -537,7 +616,7 @@ void ASmoothVoxelTerrain::AppendVoxelFacesWorld(int32 WorldX, int32 WorldY, int3
         GetNeighborTopHeightWorld(WorldX + 1, WorldY, WorldZ, v111) < v111.Z ||
         GetNeighborTopHeightWorld(WorldX + 1, WorldY, WorldZ, v110) < v110.Z)
     {
-        AddQuadFlat(v100, v101, v111, v110, FVector::RightVector);
+        AddQuadWorld(v100, v101, v111, v110, FVector::RightVector);
     }
 
     // -X face
@@ -547,7 +626,7 @@ void ASmoothVoxelTerrain::AppendVoxelFacesWorld(int32 WorldX, int32 WorldY, int3
         GetNeighborTopHeightWorld(WorldX - 1, WorldY, WorldZ, v001) < v001.Z ||
         GetNeighborTopHeightWorld(WorldX - 1, WorldY, WorldZ, v000) < v000.Z)
     {
-        AddQuadFlat(v010, v011, v001, v000, FVector::LeftVector);
+        AddQuadWorld(v010, v011, v001, v000, FVector::LeftVector);
     }
 
     // +Y face
@@ -557,7 +636,7 @@ void ASmoothVoxelTerrain::AppendVoxelFacesWorld(int32 WorldX, int32 WorldY, int3
         GetNeighborTopHeightWorld(WorldX, WorldY + 1, WorldZ, v011) < v011.Z ||
         GetNeighborTopHeightWorld(WorldX, WorldY + 1, WorldZ, v010) < v010.Z)
     {
-        AddQuadFlat(v110, v111, v011, v010, FVector::ForwardVector);
+        AddQuadWorld(v110, v111, v011, v010, FVector::ForwardVector);
     }
 
     // -Y face
@@ -567,10 +646,9 @@ void ASmoothVoxelTerrain::AppendVoxelFacesWorld(int32 WorldX, int32 WorldY, int3
         GetNeighborTopHeightWorld(WorldX, WorldY - 1, WorldZ, v101) < v101.Z ||
         GetNeighborTopHeightWorld(WorldX, WorldY - 1, WorldZ, v100) < v100.Z)
     {
-        AddQuadFlat(v000, v001, v101, v100, FVector::BackwardVector);
+        AddQuadWorld(v000, v001, v101, v100, FVector::BackwardVector);
     }
 }
-
 // -------------------------------------------------------------------
 // Chunk access helpers
 // -------------------------------------------------------------------

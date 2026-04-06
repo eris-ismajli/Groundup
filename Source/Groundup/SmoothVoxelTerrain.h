@@ -94,6 +94,9 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Collision")
     bool bEnableComplexCollision = true;
 
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Rendering")
+    float TextureScale = 0.1f;
+
 #if WITH_EDITOR
     virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
