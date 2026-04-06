@@ -255,18 +255,7 @@ void ASmoothVoxelTerrain::FVoxelChunk::UpdateSharedFace(int32 LocalX, int32 Loca
     //TerrainOwner->bCollisionDirty = true;
 }
 
-//void ASmoothVoxelTerrain::FVoxelChunk::UpdateVoxel(int32 LocalX, int32 LocalY, int32 LocalZ, EVoxelType NewType, ASmoothVoxelTerrain* TerrainOwner)
-//{
-//    int32 Index = LocalX + LocalY * TerrainOwner->ChunkSize + LocalZ * TerrainOwner->ChunkSize * TerrainOwner->ChunkSize;
-//
-//    UE_LOG(LogTemp, Warning, TEXT("Updating voxel: Local (%d,%d,%d), Index=%d, Old=%d, New=%d"),
-//        LocalX, LocalY, LocalZ, Index, (int)VoxelData[Index], (int)NewType);
-//
-//    if (VoxelData[Index] == NewType) return;
-//    VoxelData[Index] = NewType;
-//
-//    BuildMesh(TerrainOwner);
-//}
+
 
 void ASmoothVoxelTerrain::FVoxelChunk::UpdateVoxel(int32 LocalX, int32 LocalY, int32 LocalZ, EVoxelType NewType, ASmoothVoxelTerrain* TerrainOwner)
 {
@@ -277,6 +266,38 @@ void ASmoothVoxelTerrain::FVoxelChunk::UpdateVoxel(int32 LocalX, int32 LocalY, i
     UpdateVoxelMesh(LocalX, LocalY, LocalZ, NewType, TerrainOwner);
 }
 
+bool ASmoothVoxelTerrain::GetVoxelAtWorldPoint(const FVector& WorldPoint,
+    int32& OutVoxelX, int32& OutVoxelY, int32& OutVoxelZ,
+    EVoxelType* OutType /*= nullptr*/)
+{
+    // Transform from world to local space of this terrain actor
+    FVector LocalPos = GetActorTransform().InverseTransformPosition(WorldPoint);
+
+    // Compute voxel indices (local grid coordinates)
+    OutVoxelX = FMath::FloorToInt(LocalPos.X / CubeSize);
+    OutVoxelY = FMath::FloorToInt(LocalPos.Y / CubeSize);
+    OutVoxelZ = FMath::FloorToInt(LocalPos.Z / CubeSize);
+
+    // Calculate world extents in voxels
+    const int32 MaxVoxelX = WorldChunksX * ChunkSize;
+    const int32 MaxVoxelY = WorldChunksY * ChunkSize;
+
+    // Validate all axes
+    if (OutVoxelX < 0 || OutVoxelX >= MaxVoxelX ||
+        OutVoxelY < 0 || OutVoxelY >= MaxVoxelY ||
+        OutVoxelZ < 0 || OutVoxelZ >= MaxHeight)
+    {
+        return false;
+    }
+
+    // Optionally return the actual voxel type
+    if (OutType)
+    {
+        *OutType = GetVoxelAtWorld(OutVoxelX, OutVoxelY, OutVoxelZ);
+    }
+
+    return true;
+}
 // -------------------------------------------------------------------
 // Public edit functions (O(1) per chunk)
 // -------------------------------------------------------------------

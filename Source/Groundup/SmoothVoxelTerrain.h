@@ -75,6 +75,13 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Terrain")
     void RemoveVoxel(FVector WorldLocation);
 
+    bool GetVoxelAtWorldPoint(const FVector& WorldPoint,
+        int32& OutVoxelX, int32& OutVoxelY, int32& OutVoxelZ,
+        EVoxelType* OutType /*= nullptr*/);
+
+    EVoxelType GetVoxelAtWorld(int32 WorldX, int32 WorldY, int32 WorldZ) const;
+
+
     UFUNCTION(BlueprintCallable, Category = "Terrain")
     void PlaceVoxel(FVector WorldLocation, EVoxelType Type = EVoxelType::Dirt);
 
@@ -134,7 +141,6 @@ private:
     void WorldToLocalVoxel(const FVector& WorldPos, const FIntVector& ChunkCoord, int32& OutX, int32& OutY, int32& OutZ) const;
     FVector ChunkCoordToWorldOrigin(const FIntVector& ChunkCoord) const;
 
-    EVoxelType GetVoxelAtWorld(int32 WorldX, int32 WorldY, int32 WorldZ) const;
     float GetHeightAtWorldCorner(int32 WorldX, int32 WorldY) const;
     float GetInterpolatedHeight(float WorldX, float WorldY) const;
 
