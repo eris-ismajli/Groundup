@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+﻿// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "GroundupCharacter.h"
 #include "Animation/AnimInstance.h"
@@ -137,14 +137,53 @@ void AGroundupCharacter::BreakCube()
 
 	if (GetWorld()->LineTraceSingleByChannel(HitResult, Start, End, ECC_Visibility, QueryParams))
 	{
-
 		ASmoothVoxelTerrain* HitTerrain = Cast<ASmoothVoxelTerrain>(HitResult.GetActor());
 		if (HitTerrain)
 		{
-			FVector LocationInsideBlock = HitResult.ImpactPoint - (HitResult.ImpactNormal * 5.0f);
+			int32 VoxelX, VoxelY, VoxelZ;
+			EVoxelType VoxelType;
 
+			if (HitTerrain->GetVoxelAtWorldPoint(HitResult.ImpactPoint, VoxelX, VoxelY, VoxelZ, &VoxelType))
+			{
+				// If we hit air, check the voxel directly below
+				if (VoxelType == EVoxelType::Air)
+				{
+					// Look one step down
+					int32 BelowX = VoxelX;
+					int32 BelowY = VoxelY;
+					int32 BelowZ = VoxelZ - 1;
 
-			HitTerrain->RemoveVoxel(LocationInsideBlock);
+					// Get the voxel type at that position (if valid)
+					EVoxelType BelowType = HitTerrain->GetVoxelAtWorld(BelowX, BelowY, BelowZ);
+					if (BelowType != EVoxelType::Air)
+					{
+						// Use the below voxel instead
+						VoxelX = BelowX;
+						VoxelY = BelowY;
+						VoxelZ = BelowZ;
+						VoxelType = BelowType;
+					}
+					else
+					{
+						// No solid voxel below – nothing to remove
+						return;
+					}
+				}
+
+				// At this point VoxelType is guaranteed not to be Air
+				if (VoxelType != EVoxelType::Air)
+				{
+					// Compute world‑space center of the (possibly adjusted) voxel
+					FVector LocalCenter(
+						VoxelX * HitTerrain->CubeSize + HitTerrain->CubeSize * 0.5f,
+						VoxelY * HitTerrain->CubeSize + HitTerrain->CubeSize * 0.5f,
+						VoxelZ * HitTerrain->CubeSize + HitTerrain->CubeSize * 0.5f
+					);
+					FVector WorldCenter = HitTerrain->GetActorTransform().TransformPosition(LocalCenter);
+
+					HitTerrain->RemoveVoxel(WorldCenter);
+				}
+			}
 		}
 	}
 }
