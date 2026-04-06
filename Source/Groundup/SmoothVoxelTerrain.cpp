@@ -21,7 +21,7 @@ static int32 FloorDiv(int32 Dividend, int32 Divisor)
 // -------------------------------------------------------------------
 ASmoothVoxelTerrain::ASmoothVoxelTerrain()
 {
-    PrimaryActorTick.bCanEverTick = false;
+    PrimaryActorTick.bCanEverTick = true;
 
     RootSceneComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
     RootComponent = RootSceneComponent;
@@ -48,6 +48,25 @@ void ASmoothVoxelTerrain::BeginPlay()
     if (Chunks.Num() == 0)
     {
         RebuildTerrain();
+    }
+}
+
+void ASmoothVoxelTerrain::Tick(float DeltaTime)
+{
+    Super::Tick(DeltaTime);
+    UpdateCollisionIfNeeded();
+}
+
+void ASmoothVoxelTerrain::UpdateCollisionIfNeeded()
+{
+    if (bCollisionDirty)
+    {
+        for (auto& Pair : Chunks)
+        {
+            if (Pair.Value->MeshComponent)
+                Pair.Value->MeshComponent->UpdateCollision(false);
+        }
+        bCollisionDirty = false;
     }
 }
 
@@ -219,17 +238,43 @@ void ASmoothVoxelTerrain::FVoxelChunk::BuildMesh(ASmoothVoxelTerrain* TerrainOwn
         MeshComponent->RegisterComponent();
 }
 
+void ASmoothVoxelTerrain::FVoxelChunk::UpdateSharedFace(int32 LocalX, int32 LocalY, int32 LocalZ, ASmoothVoxelTerrain* TerrainOwner, const FIntVector& NeighborDirection)
+{
+    int32 Index = LocalX + LocalY * TerrainOwner->ChunkSize + LocalZ * TerrainOwner->ChunkSize * TerrainOwner->ChunkSize;
+    if (VoxelData[Index] == EVoxelType::Air) return;
+
+    UDynamicMesh* DynamicMesh = MeshComponent->GetDynamicMesh();
+    DynamicMesh->EditMesh([&](FDynamicMesh3& MeshOut)
+        {
+            RemoveVoxelFaces(LocalX, LocalY, LocalZ, MeshOut, TerrainOwner);
+            AddVoxelFaces(LocalX, LocalY, LocalZ, MeshOut, TerrainOwner);
+        });
+
+    MeshComponent->NotifyMeshUpdated();
+    MeshComponent->MarkRenderStateDirty();
+    TerrainOwner->bCollisionDirty = true;
+}
+
+//void ASmoothVoxelTerrain::FVoxelChunk::UpdateVoxel(int32 LocalX, int32 LocalY, int32 LocalZ, EVoxelType NewType, ASmoothVoxelTerrain* TerrainOwner)
+//{
+//    int32 Index = LocalX + LocalY * TerrainOwner->ChunkSize + LocalZ * TerrainOwner->ChunkSize * TerrainOwner->ChunkSize;
+//
+//    UE_LOG(LogTemp, Warning, TEXT("Updating voxel: Local (%d,%d,%d), Index=%d, Old=%d, New=%d"),
+//        LocalX, LocalY, LocalZ, Index, (int)VoxelData[Index], (int)NewType);
+//
+//    if (VoxelData[Index] == NewType) return;
+//    VoxelData[Index] = NewType;
+//
+//    BuildMesh(TerrainOwner);
+//}
+
 void ASmoothVoxelTerrain::FVoxelChunk::UpdateVoxel(int32 LocalX, int32 LocalY, int32 LocalZ, EVoxelType NewType, ASmoothVoxelTerrain* TerrainOwner)
 {
     int32 Index = LocalX + LocalY * TerrainOwner->ChunkSize + LocalZ * TerrainOwner->ChunkSize * TerrainOwner->ChunkSize;
-
-    UE_LOG(LogTemp, Warning, TEXT("Updating voxel: Local (%d,%d,%d), Index=%d, Old=%d, New=%d"),
-        LocalX, LocalY, LocalZ, Index, (int)VoxelData[Index], (int)NewType);
-
     if (VoxelData[Index] == NewType) return;
-    VoxelData[Index] = NewType;
 
-    BuildMesh(TerrainOwner);
+    // Use incremental mesh update instead of full rebuild
+    UpdateVoxelMesh(LocalX, LocalY, LocalZ, NewType, TerrainOwner);
 }
 
 // -------------------------------------------------------------------
@@ -245,7 +290,6 @@ void ASmoothVoxelTerrain::RemoveVoxel(FVector WorldLocation)
 
     int32 lx, ly, lz;
     WorldToLocalVoxel(WorldLocation, ChunkCoord, lx, ly, lz);
-  
     if (lx < 0 || lx >= ChunkSize || ly < 0 || ly >= ChunkSize || lz < 0 || lz >= MaxHeight) return;
 
     int32 Index = lx + ly * ChunkSize + lz * ChunkSize * ChunkSize;
@@ -258,31 +302,41 @@ void ASmoothVoxelTerrain::RemoveVoxel(FVector WorldLocation)
         ChunkCoord.X, ChunkCoord.Y, lx, ly, lz);
 
     double Start = FPlatformTime::Seconds();
+
+    // Update the chunk containing the voxel (incremental)
     Chunk->UpdateVoxel(lx, ly, lz, EVoxelType::Air, this);
 
-    // If the edited voxel lies on a chunk boundary, also rebuild neighbor chunks.
-    bool bOnBoundary = (lx == 0) || (lx == ChunkSize - 1) || (ly == 0) || (ly == ChunkSize - 1) || (lz == 0) || (lz == MaxHeight - 1);
-    if (bOnBoundary)
-    {
-        for (int32 dx = -1; dx <= 1; ++dx)
-        {
-            for (int32 dy = -1; dy <= 1; ++dy)
-            {
-                for (int32 dz = -1; dz <= 1; ++dz)
-                {
-                    if (dx == 0 && dy == 0 && dz == 0) continue;
-                    FIntVector NeighborCoord = ChunkCoord + FIntVector(dx, dy, dz);
-                    FVoxelChunk* Neighbor = GetChunk(NeighborCoord);
-                    if (Neighbor)
-                        Neighbor->BuildMesh(this);
-                }
-            }
-        }
+    // Update only face-adjacent neighbors
+    if (lx == 0) {
+        if (FVoxelChunk* Neighbor = GetChunk(ChunkCoord + FIntVector(-1, 0, 0)))
+            Neighbor->UpdateSharedFace(ChunkSize - 1, ly, lz, this, FIntVector(1, 0, 0));
+    }
+    if (lx == ChunkSize - 1) {
+        if (FVoxelChunk* Neighbor = GetChunk(ChunkCoord + FIntVector(1, 0, 0)))
+            Neighbor->UpdateSharedFace(0, ly, lz, this, FIntVector(-1, 0, 0));
+    }
+    if (ly == 0) {
+        if (FVoxelChunk* Neighbor = GetChunk(ChunkCoord + FIntVector(0, -1, 0)))
+            Neighbor->UpdateSharedFace(lx, ChunkSize - 1, lz, this, FIntVector(0, 1, 0));
+    }
+    if (ly == ChunkSize - 1) {
+        if (FVoxelChunk* Neighbor = GetChunk(ChunkCoord + FIntVector(0, 1, 0)))
+            Neighbor->UpdateSharedFace(lx, 0, lz, this, FIntVector(0, -1, 0));
+    }
+    if (lz == 0) {
+        if (FVoxelChunk* Neighbor = GetChunk(ChunkCoord + FIntVector(0, 0, -1)))
+            Neighbor->UpdateSharedFace(lx, ly, MaxHeight - 1, this, FIntVector(0, 0, 1));
+    }
+    if (lz == MaxHeight - 1) {
+        if (FVoxelChunk* Neighbor = GetChunk(ChunkCoord + FIntVector(0, 0, 1)))
+            Neighbor->UpdateSharedFace(lx, ly, 0, this, FIntVector(0, 0, -1));
     }
 
     double End = FPlatformTime::Seconds();
     UE_LOG(LogTemp, Warning, TEXT("RemoveVoxel took %.2f ms"), (End - Start) * 1000.0);
 }
+
+// Apply identical changes to PlaceVoxel (replace the boundary loop with the same conditional checks)
 
 void ASmoothVoxelTerrain::PlaceVoxel(FVector WorldLocation, EVoxelType Type)
 {
@@ -650,6 +704,106 @@ void ASmoothVoxelTerrain::AppendVoxelFacesWorld(int32 WorldX, int32 WorldY, int3
     {
         AddQuadWorld(v000, v001, v101, v100, FVector::BackwardVector);
     }
+}
+
+void ASmoothVoxelTerrain::FVoxelChunk::UpdateVoxelMesh(int32 LocalX, int32 LocalY, int32 LocalZ, EVoxelType NewType, ASmoothVoxelTerrain* TerrainOwner)
+{
+    if (!MeshComponent) return;
+    UDynamicMesh* DynamicMesh = MeshComponent->GetDynamicMesh();
+    if (!DynamicMesh) return;
+
+    DynamicMesh->EditMesh([&](FDynamicMesh3& MeshOut)
+        {
+            FDynamicMeshAttributeSet* Attr = MeshOut.Attributes();
+            if (!Attr) return;
+
+            // Remove faces of the changed voxel and its 6 face-adjacent neighbors (including self)
+            for (int32 dz = -1; dz <= 1; ++dz)
+            {
+                for (int32 dy = -1; dy <= 1; ++dy)
+                {
+                    for (int32 dx = -1; dx <= 1; ++dx)
+                    {
+                        int32 dist = FMath::Abs(dx) + FMath::Abs(dy) + FMath::Abs(dz);
+                        if (dist != 0 && dist != 1) continue; // only self and face-neighbors
+
+                        int32 nx = LocalX + dx;
+                        int32 ny = LocalY + dy;
+                        int32 nz = LocalZ + dz;
+                        if (nx >= 0 && nx < TerrainOwner->ChunkSize &&
+                            ny >= 0 && ny < TerrainOwner->ChunkSize &&
+                            nz >= 0 && nz < TerrainOwner->MaxHeight)
+                        {
+                            RemoveVoxelFaces(nx, ny, nz, MeshOut, TerrainOwner);
+                        }
+                    }
+                }
+            }
+
+            // Update the voxel data
+            int32 Index = LocalX + LocalY * TerrainOwner->ChunkSize + LocalZ * TerrainOwner->ChunkSize * TerrainOwner->ChunkSize;
+            VoxelData[Index] = NewType;
+
+            // Re-add faces for the changed voxel and its face-neighbors
+            for (int32 dz = -1; dz <= 1; ++dz)
+            {
+                for (int32 dy = -1; dy <= 1; ++dy)
+                {
+                    for (int32 dx = -1; dx <= 1; ++dx)
+                    {
+                        int32 dist = FMath::Abs(dx) + FMath::Abs(dy) + FMath::Abs(dz);
+                        if (dist != 0 && dist != 1) continue;
+
+                        int32 nx = LocalX + dx;
+                        int32 ny = LocalY + dy;
+                        int32 nz = LocalZ + dz;
+                        if (nx >= 0 && nx < TerrainOwner->ChunkSize &&
+                            ny >= 0 && ny < TerrainOwner->ChunkSize &&
+                            nz >= 0 && nz < TerrainOwner->MaxHeight)
+                        {
+                            int32 neighborIndex = nx + ny * TerrainOwner->ChunkSize + nz * TerrainOwner->ChunkSize * TerrainOwner->ChunkSize;
+                            if (VoxelData[neighborIndex] != EVoxelType::Air)
+                            {
+                                AddVoxelFaces(nx, ny, nz, MeshOut, TerrainOwner);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+    MeshComponent->NotifyMeshUpdated();
+    MeshComponent->MarkRenderStateDirty();
+    TerrainOwner->bCollisionDirty = true;
+}
+
+void ASmoothVoxelTerrain::FVoxelChunk::RemoveVoxelFaces(int32 LocalX, int32 LocalY, int32 LocalZ, FDynamicMesh3& Mesh, ASmoothVoxelTerrain* TerrainOwner)
+{
+    int32 VoxelIndex = LocalX + LocalY * TerrainOwner->ChunkSize + LocalZ * TerrainOwner->ChunkSize * TerrainOwner->ChunkSize;
+    TArray<int32>& TriIDs = VoxelTriangles[VoxelIndex];
+
+    for (int32 TriID : TriIDs)
+    {
+        if (Mesh.IsTriangle(TriID))
+        {
+            // Remove only the triangle from the mesh – overlay elements become orphaned but that's fine
+            Mesh.RemoveTriangle(TriID, false);
+        }
+    }
+    TriIDs.Empty();
+}
+
+void ASmoothVoxelTerrain::FVoxelChunk::AddVoxelFaces(int32 LocalX, int32 LocalY, int32 LocalZ, FDynamicMesh3& Mesh, ASmoothVoxelTerrain* TerrainOwner)
+{
+    int32 WorldX = Coord.X * TerrainOwner->ChunkSize + LocalX;
+    int32 WorldY = Coord.Y * TerrainOwner->ChunkSize + LocalY;
+    int32 WorldZ = LocalZ;
+
+    TArray<int32> NewTriIDs;
+    TerrainOwner->AppendVoxelFacesWorld(WorldX, WorldY, WorldZ, Mesh, NewTriIDs);
+
+    int32 VoxelIndex = LocalX + LocalY * TerrainOwner->ChunkSize + LocalZ * TerrainOwner->ChunkSize * TerrainOwner->ChunkSize;
+    VoxelTriangles[VoxelIndex] = MoveTemp(NewTriIDs);
 }
 // -------------------------------------------------------------------
 // Chunk access helpers

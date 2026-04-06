@@ -3,6 +3,9 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Components/DynamicMeshComponent.h"
+#include "DynamicMesh/DynamicMesh3.h"
+#include "DynamicMesh/DynamicMeshAttributeSet.h"
+#include "DynamicMesh/DynamicMeshOverlay.h"
 #include "SmoothVoxelTerrain.generated.h"
 
 namespace UE::Geometry { class FDynamicMesh3; }
@@ -29,6 +32,8 @@ protected:
     virtual void BeginPlay() override;
     virtual void OnConstruction(const FTransform& Transform) override;
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+    virtual void Tick(float DeltaTime) override;
+
 
 public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
@@ -104,13 +109,19 @@ public:
 private:
     struct FVoxelChunk
     {
-        UDynamicMeshComponent* MeshComponent = nullptr;
-        TArray<EVoxelType> VoxelData;
-        TArray<TArray<int32>> VoxelTriangles;
         FIntVector Coord;
+        TArray<EVoxelType> VoxelData;
+        TArray<TArray<int32>> VoxelTriangles; // triangle IDs per voxel
+        UDynamicMeshComponent* MeshComponent = nullptr;
 
         void BuildMesh(ASmoothVoxelTerrain* TerrainOwner);
         void UpdateVoxel(int32 LocalX, int32 LocalY, int32 LocalZ, EVoxelType NewType, ASmoothVoxelTerrain* TerrainOwner);
+
+        // Incremental editing methods
+        void UpdateVoxelMesh(int32 LocalX, int32 LocalY, int32 LocalZ, EVoxelType NewType, ASmoothVoxelTerrain* TerrainOwner);
+        void RemoveVoxelFaces(int32 LocalX, int32 LocalY, int32 LocalZ, FDynamicMesh3& Mesh, ASmoothVoxelTerrain* TerrainOwner);
+        void AddVoxelFaces(int32 LocalX, int32 LocalY, int32 LocalZ, FDynamicMesh3& Mesh, ASmoothVoxelTerrain* TerrainOwner);
+        void UpdateSharedFace(int32 LocalX, int32 LocalY, int32 LocalZ, ASmoothVoxelTerrain* TerrainOwner, const FIntVector& NeighborDirection);
     };
 
     TMap<FIntVector, TUniquePtr<FVoxelChunk>> Chunks;
@@ -138,8 +149,8 @@ private:
     FVoxelChunk* GetChunk(const FIntVector& Coord);
     const FVoxelChunk* GetChunk(const FIntVector& Coord) const;
 
-    void RebuildNeighbors(const FIntVector& ChunkCoord, int32 lx, int32 ly, int32 lz);
-
+    bool bCollisionDirty = false;
+    void UpdateCollisionIfNeeded();
 
     bool bIsDestroyed = false;
 };
