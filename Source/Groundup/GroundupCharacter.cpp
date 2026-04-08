@@ -206,11 +206,8 @@ void AGroundupCharacter::PlaceCube()
 		ASmoothVoxelTerrain* HitTerrain = Cast<ASmoothVoxelTerrain>(HitResult.GetActor());
 		if (HitTerrain)
 		{
-
-			//FVector LocationInsideBlock = HitResult.ImpactPoint - (HitResult.ImpactNormal * 5.0f);
-
-
-			HitTerrain->PlaceVoxel(HitResult.ImpactPoint);
+			FVector PlaceLocation = HitResult.ImpactPoint + HitResult.ImpactNormal * (HitTerrain->CubeSize * 0.5f);
+			HitTerrain->PlaceVoxel(PlaceLocation);
 		}
 	}
 }
