@@ -3,100 +3,228 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Components/DynamicMeshComponent.h"
+#include "DynamicMesh/DynamicMesh3.h"
+#include "DynamicMesh/DynamicMeshAttributeSet.h"
+#include "DynamicMesh/DynamicMeshOverlay.h"
 #include "SmoothVoxelTerrain.generated.h"
+
+namespace UE::Geometry { class FDynamicMesh3; }
 
 UENUM(BlueprintType)
 enum class EVoxelType : uint8
 {
-	Air,
-	Grass,
-	Dirt,
-	Stone
+    Air   UMETA(DisplayName = "Air"),
+    Grass UMETA(DisplayName = "Grass"),
+    Dirt  UMETA(DisplayName = "Dirt"),
+    Stone UMETA(DisplayName = "Stone")
 };
 
 UCLASS()
 class GROUNDUP_API ASmoothVoxelTerrain : public AActor
 {
-	GENERATED_BODY()
+    GENERATED_BODY()
 
 public:
-	ASmoothVoxelTerrain();
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Settings")
-	int32 Seed = 1337;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Settings")
-	float CubeSize = 100.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Settings")
-	int32 ChunkSize = 16;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Settings")
-	int32 MaxHeight = 64;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Noise")
-	float NoiseScale = 0.05f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Noise")
-	float HeightMultiplier = 20.0f;
-
-	UFUNCTION(BlueprintCallable, Category = "Voxel")
-	void RemoveVoxel(FVector WorldLocation);
-
-	UFUNCTION(BlueprintCallable, Category = "Voxel")
-	void PlaceVoxel(FVector WorldLocation, EVoxelType Type = EVoxelType::Dirt);
-
-	UFUNCTION(CallInEditor, Category = "Voxel")
-	void RebuildTerrain();
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel|Terrain")
-	bool bSmoothTerrain = true;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Voxel")
-	float MinGrassThickness = 0.f;
+    ASmoothVoxelTerrain();
+    ~ASmoothVoxelTerrain();
 
 protected:
-	virtual void OnConstruction(const FTransform& Transform) override;
-	virtual void BeginPlay() override;
-	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
-	virtual ~ASmoothVoxelTerrain() override;
+    virtual void BeginPlay() override;
+    virtual void OnConstruction(const FTransform& Transform) override;
+    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+    virtual void Tick(float DeltaTime) override;
 
+public:
+    // --- Materials ---
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Materials")
+    UMaterialInterface* GrassMaterial = nullptr;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Materials")
+    UMaterialInterface* DirtMaterial = nullptr;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Materials")
+    UMaterialInterface* StoneMaterial = nullptr;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Materials")
+    UMaterialInterface* GrassBladesMaterial = nullptr;
+
+    // --- Terrain Configuration ---
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    int32 ChunkSize = 32;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    int32 MaxHeight = 64;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    int32 WorldChunksX = 4;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    int32 WorldChunksY = 4;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    float CubeSize = 100.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    float NoiseScale = 0.01f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    float HeightMultiplier = 2000.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    float MinGrassThickness = 1.5f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    int32 Seed = 1337;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain")
+    bool bSmoothTerrain = false;
+
+    // --- Stylized Grass Properties ---
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Grass")
+    bool bEnableGrassGeometry = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Grass")
+    int32 GrassMinDensity = 2;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Grass")
+    int32 GrassMaxDensity = 6;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Grass")
+    float GrassMinHeight = 35.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Grass")
+    float GrassMaxHeight = 75.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Grass")
+    float GrassMinWidth = 6.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Grass")
+    float GrassMaxWidth = 12.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Grass")
+    float GrassColorNoiseScale = 0.02f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Grass")
+    float GrassDensityNoiseScale = 0.03f;
+
+    // --- Optimized Grass Controls ---
+    /**
+     * Higher segments yield more natural curves but cost more performance.
+     * 1 = 1 triangle (Highly optimized for vast dense grass)
+     * 2 = 3 triangles (Original tapered multi-segment shape)
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Grass", meta = (ClampMin = "1", ClampMax = "2"))
+    int32 GrassBladeSegments = 1;
+
+    /**
+     * If enabled, grass geometry will not generate back-faces.
+     * This reduces grass triangle generation and index buffers by 50%.
+     * Requires the GrassBladesMaterial to have "Two Sided" enabled.
+     */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Grass")
+    bool bTwoSidedGrass = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Grass")
+    FLinearColor GrassBaseColorDark = FLinearColor(0.015f, 0.10f, 0.03f, 1.0f);
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Grass")
+    FLinearColor GrassTipColorDark = FLinearColor(0.06f, 0.30f, 0.06f, 1.0f);
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Grass")
+    FLinearColor GrassBaseColorLight = FLinearColor(0.04f, 0.18f, 0.04f, 1.0f);
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Grass")
+    FLinearColor GrassTipColorLight = FLinearColor(0.20f, 0.48f, 0.08f, 1.0f);
+
+    UFUNCTION(BlueprintCallable, Category = "Terrain")
+    void RebuildTerrain();
+
+    UFUNCTION(BlueprintCallable, Category = "Terrain")
+    void RemoveVoxel(FVector WorldLocation);
+
+    bool GetVoxelAtWorldPoint(const FVector& WorldPoint,
+        int32& OutVoxelX, int32& OutVoxelY, int32& OutVoxelZ,
+        EVoxelType* OutType = nullptr);
+
+    EVoxelType GetVoxelAtWorld(int32 WorldX, int32 WorldY, int32 WorldZ) const;
+
+    UFUNCTION(BlueprintCallable, Category = "Terrain")
+    void PlaceVoxel(FVector WorldLocation, EVoxelType Type = EVoxelType::Dirt);
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Collision")
+    TEnumAsByte<ECollisionEnabled::Type> CollisionEnabled = ECollisionEnabled::QueryAndPhysics;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Collision")
+    FName CollisionProfileName = "BlockAll";
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Collision")
+    bool bGenerateOverlapEvents = false;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Rendering")
+    bool bCastShadow = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Rendering")
+    bool bReceivesDecals = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Collision")
+    bool bUseComplexAsSimpleCollision = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Collision")
+    bool bEnableComplexCollision = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Rendering")
+    float TextureScale = 0.1f;
+
+#if WITH_EDITOR
+    virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
 
 private:
-	UPROPERTY(VisibleAnywhere)
-	UDynamicMeshComponent* Mesh;
+    struct FVoxelChunk
+    {
+        FIntVector Coord;
+        TArray<EVoxelType> VoxelData;
+        TArray<TArray<int32>> VoxelTriangles;
+        TArray<TArray<int32>> GrassVoxelTriangles;
+        UDynamicMeshComponent* MeshComponent = nullptr;
+        UDynamicMeshComponent* GrassMeshComponent = nullptr;
 
-	UPROPERTY()
-	TArray<EVoxelType> VoxelData;
+        void BuildMesh(ASmoothVoxelTerrain* TerrainOwner);
+        void UpdateVoxel(int32 LocalX, int32 LocalY, int32 LocalZ, EVoxelType NewType, ASmoothVoxelTerrain* TerrainOwner);
 
-	TMap<int32, TArray<int32>> VoxelTriangleMap;
+        void UpdateVoxelMesh(int32 LocalX, int32 LocalY, int32 LocalZ, EVoxelType NewType, ASmoothVoxelTerrain* TerrainOwner);
+        void RemoveVoxelFaces(int32 LocalX, int32 LocalY, int32 LocalZ, UE::Geometry::FDynamicMesh3& Mesh, UE::Geometry::FDynamicMesh3& GrassMesh, ASmoothVoxelTerrain* TerrainOwner);
+        void AddVoxelFaces(int32 LocalX, int32 LocalY, int32 LocalZ, UE::Geometry::FDynamicMesh3& Mesh, UE::Geometry::FDynamicMesh3& GrassMesh, ASmoothVoxelTerrain* TerrainOwner);
+        void UpdateSharedFace(int32 LocalX, int32 LocalY, int32 LocalZ, ASmoothVoxelTerrain* TerrainOwner, const FIntVector& NeighborDirection);
+    };
 
-	UPROPERTY()
-	TArray<float> HeightMap;
+    TMap<FIntVector, TUniquePtr<FVoxelChunk>> Chunks;
 
-	void GenerateVoxelData();
-	void PrecomputeHeightMap();
-	void CreateMesh();
+    UPROPERTY(VisibleAnywhere)
+    USceneComponent* RootSceneComponent = nullptr;
 
-	// Logic Helpers
-	int32 GetIndex(int32 x, int32 y, int32 z) const;
-	EVoxelType GetVoxelAt(int32 x, int32 y, int32 z) const;
-	float GetHeightAtCorner(int32 x, int32 y) const;
-	FVector GetSmoothVertex(int32 cornerX, int32 cornerY, int32 cornerZ, int32 vX, int32 vY, int32 vZ) const;
-	FVector GetSmoothNormal(int32 x, int32 y) const;
-	float GetInterpolatedHeight(float X, float Y) const;
+    void GenerateChunks();
+    FIntVector WorldToChunkCoord(const FVector& WorldPos) const;
+    void WorldToLocalVoxel(const FVector& WorldPos, const FIntVector& ChunkCoord, int32& OutX, int32& OutY, int32& OutZ) const;
+    FVector ChunkCoordToWorldOrigin(const FIntVector& ChunkCoord) const;
 
-	void GenerateVoxelMesh(int32 x, int32 y, int32 z,
-		TArray<FVector>& OutVertices, TArray<int32>& OutTriangles) const;
+    float GetHeightAtWorldCorner(int32 WorldX, int32 WorldY) const;
+    float GetInterpolatedHeight(float WorldX, float WorldY) const;
 
-	void RegenerateVoxelAndNeighbors(int32 CenterX, int32 CenterY, int32 CenterZ);
+    FVector GetSmoothVertexWorld(int32 WorldX, int32 WorldY, int32 WorldZ, int32 VoxX, int32 VoxY, int32 VoxZ) const;
+    FVector GetSmoothNormalWorld(int32 WorldX, int32 WorldY) const;
+    float GetNeighborTopHeightWorld(int32 WorldX, int32 WorldY, int32 WorldZ, const FVector& Vertex) const;
 
+    FLinearColor GetStylizedColorForVoxel(const FVector& WorldPos, EVoxelType VoxelType) const;
 
+    void AppendVoxelFacesWorld(int32 WorldX, int32 WorldY, int32 WorldZ, UE::Geometry::FDynamicMesh3& Mesh, TArray<int32>& OutTriIDs);
+    void AppendGrassBladesWorld(int32 WorldX, int32 WorldY, int32 WorldZ, UE::Geometry::FDynamicMesh3& Mesh, TArray<int32>& OutTriIDs);
 
-	void CreateFace(FVector p1, FVector p2, FVector p3, FVector p4, int32& VertexIdx,
-		TArray<FVector>& Verts, TArray<int32>& Tris) const;
+    FVoxelChunk* GetChunk(const FIntVector& Coord);
+    const FVoxelChunk* GetChunk(const FIntVector& Coord) const;
 
-	float GetNeighborTopHeight(int32 neighborX, int32 neighborY, int32 neighborZ, const FVector& point) const;
+    bool bCollisionDirty = false;
+    void UpdateCollisionIfNeeded();
 
-	bool bIsDestroyed = false;
+    bool bIsDestroyed = false;
 };
