@@ -626,24 +626,27 @@ void ASmoothVoxelTerrain::AppendVoxelFacesWorld(int32 WorldX, int32 WorldY, int3
     FVector v011 = GetSmoothVertexWorld(WorldX, WorldY + 1, WorldZ + 1, WorldX, WorldY, WorldZ);
     FVector v111 = GetSmoothVertexWorld(WorldX + 1, WorldY + 1, WorldZ + 1, WorldX, WorldY, WorldZ);
 
+    FVector VoxelOrigin((double)WorldX * CubeSize, (double)WorldY * CubeSize, (double)WorldZ * CubeSize);
+
     auto GetUVForVertex = [&](const FVector& Pos, const FVector& FaceNormal) -> FVector2D
         {
+            FVector LocalPos = (Pos - VoxelOrigin) / CubeSize;
             FVector AbsN = FaceNormal.GetAbs();
             float U, V;
             if (AbsN.Z > 0.9f)
             {
-                U = Pos.X * TextureScale;
-                V = Pos.Y * TextureScale;
+                U = LocalPos.X * TextureScale;
+                V = LocalPos.Y * TextureScale;
             }
             else if (AbsN.X > 0.9f)
             {
-                U = Pos.Y * TextureScale;
-                V = Pos.Z * TextureScale;
+                U = LocalPos.Y * TextureScale;
+                V = LocalPos.Z * TextureScale;
             }
             else
             {
-                U = Pos.X * TextureScale;
-                V = Pos.Z * TextureScale;
+                U = LocalPos.X * TextureScale;
+                V = LocalPos.Z * TextureScale;
             }
             return FVector2D(U, V);
         };
@@ -836,7 +839,7 @@ void ASmoothVoxelTerrain::AppendVoxelFacesWorld(int32 WorldX, int32 WorldY, int3
         GetNeighborTopHeightWorld(WorldX + 1, WorldY, WorldZ, v111) < v111.Z ||
         GetNeighborTopHeightWorld(WorldX + 1, WorldY, WorldZ, v110) < v110.Z)
     {
-        AddQuadWorld(v100, v101, v111, v110, FVector(0.f, 1.f, 0.f), CurrentType, SideMatID);
+        AddQuadWorld(v100, v101, v111, v110, FVector(1.f, 0.f, 0.f), CurrentType, SideMatID);
     }
 
     if (GetVoxelAtWorld(WorldX - 1, WorldY, WorldZ) == EVoxelType::Air ||
@@ -845,7 +848,7 @@ void ASmoothVoxelTerrain::AppendVoxelFacesWorld(int32 WorldX, int32 WorldY, int3
         GetNeighborTopHeightWorld(WorldX - 1, WorldY, WorldZ, v001) < v001.Z ||
         GetNeighborTopHeightWorld(WorldX - 1, WorldY, WorldZ, v000) < v000.Z)
     {
-        AddQuadWorld(v010, v011, v001, v000, FVector(0.f, -1.f, 0.f), CurrentType, SideMatID);
+        AddQuadWorld(v010, v011, v001, v000, FVector(-1.f, 0.f, 0.f), CurrentType, SideMatID);
     }
 
     if (GetVoxelAtWorld(WorldX, WorldY + 1, WorldZ) == EVoxelType::Air ||
@@ -854,7 +857,7 @@ void ASmoothVoxelTerrain::AppendVoxelFacesWorld(int32 WorldX, int32 WorldY, int3
         GetNeighborTopHeightWorld(WorldX, WorldY + 1, WorldZ, v011) < v011.Z ||
         GetNeighborTopHeightWorld(WorldX, WorldY + 1, WorldZ, v010) < v010.Z)
     {
-        AddQuadWorld(v110, v111, v011, v010, FVector(1.f, 0.f, 0.f), CurrentType, SideMatID);
+        AddQuadWorld(v110, v111, v011, v010, FVector(0.f, 1.f, 0.f), CurrentType, SideMatID);
     }
 
     if (GetVoxelAtWorld(WorldX, WorldY - 1, WorldZ) == EVoxelType::Air ||
@@ -863,7 +866,7 @@ void ASmoothVoxelTerrain::AppendVoxelFacesWorld(int32 WorldX, int32 WorldY, int3
         GetNeighborTopHeightWorld(WorldX, WorldY - 1, WorldZ, v101) < v101.Z ||
         GetNeighborTopHeightWorld(WorldX, WorldY - 1, WorldZ, v100) < v100.Z)
     {
-        AddQuadWorld(v000, v001, v101, v100, FVector(-1.f, 0.f, 0.f), CurrentType, SideMatID);
+        AddQuadWorld(v000, v001, v101, v100, FVector(0.f, -1.f, 0.f), CurrentType, SideMatID);
     }
 }
 
