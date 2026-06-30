@@ -10,6 +10,9 @@
 
 namespace UE::Geometry { class FDynamicMesh3; }
 
+struct FHeightCache;
+struct FChunkNeighborhood;
+
 UENUM(BlueprintType)
 enum class EVoxelType : uint8
 {
@@ -25,6 +28,25 @@ class GROUNDUP_API ASmoothVoxelTerrain : public AActor
     GENERATED_BODY()
 
 public:
+    // Moved to the public section to allow external helper structures to access its types
+    struct FVoxelChunk
+    {
+        FIntVector Coord;
+        TArray<EVoxelType> VoxelData;
+        TMap<int32, TArray<int32>> VoxelTriangles;
+        TMap<int32, TArray<int32>> GrassVoxelTriangles;
+        UDynamicMeshComponent* MeshComponent = nullptr;
+        UDynamicMeshComponent* GrassMeshComponent = nullptr;
+
+        void BuildMesh(ASmoothVoxelTerrain* TerrainOwner);
+        void UpdateVoxel(int32 LocalX, int32 LocalY, int32 LocalZ, EVoxelType NewType, ASmoothVoxelTerrain* TerrainOwner);
+
+        void UpdateVoxelMesh(int32 LocalX, int32 LocalY, int32 LocalZ, EVoxelType NewType, ASmoothVoxelTerrain* TerrainOwner);
+        void RemoveVoxelFaces(int32 LocalX, int32 LocalY, int32 LocalZ, UE::Geometry::FDynamicMesh3& Mesh, UE::Geometry::FDynamicMesh3& GrassMesh, ASmoothVoxelTerrain* TerrainOwner);
+        void AddVoxelFaces(int32 LocalX, int32 LocalY, int32 LocalZ, UE::Geometry::FDynamicMesh3& Mesh, UE::Geometry::FDynamicMesh3& GrassMesh, ASmoothVoxelTerrain* TerrainOwner);
+        void UpdateSharedFace(int32 LocalX, int32 LocalY, int32 LocalZ, ASmoothVoxelTerrain* TerrainOwner, const FIntVector& NeighborDirection);
+    };
+
     ASmoothVoxelTerrain();
     ~ASmoothVoxelTerrain();
 
@@ -35,6 +57,36 @@ protected:
     virtual void Tick(float DeltaTime) override;
 
 public:
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Procedural Generation")
+    int32 RenderDistance = 6;
+
+    /** Distance at which chunks are completely unloaded (should be greater than RenderDistance) */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Procedural Generation")
+    int32 UnloadDistance = 8;
+
+    /** Frequency of player position checks in seconds */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Procedural Generation")
+    float UpdateInterval = 0.3f;
+
+    /** Maximum number of chunk meshes allowed to compile per frame to prevent stuttering */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Procedural Generation")
+    int32 MaxChunkGenPerFrame = 1;
+
+    /** Track last updated player chunk coordinate */
+    FIntVector LastPlayerChunkCoord = FIntVector(999999, 999999, 999999);
+
+    /** Accumulator for update timer */
+    float TimeSinceLastUpdate = 0.0f;
+
+    /** List of chunks waiting to be built, sorted by distance to the player */
+    TArray<FIntVector> GenerationQueue;
+
+    /** Core procedural functions */
+    void UpdateProceduralTerrain();
+    void ProcessGenerationQueue();
+    void GenerateSingleChunk(const FIntVector& ChunkCoord);
+    void UnloadChunk(const FIntVector& Coord);
+
     // --- Materials ---
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Materials")
     UMaterialInterface* GrassMaterial = nullptr;
@@ -108,19 +160,9 @@ public:
     float GrassDensityNoiseScale = 0.03f;
 
     // --- Optimized Grass Controls ---
-    /**
-     * Higher segments yield more natural curves but cost more performance.
-     * 1 = 1 triangle (Highly optimized for vast dense grass)
-     * 2 = 3 triangles (Original tapered multi-segment shape)
-     */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Grass", meta = (ClampMin = "1", ClampMax = "2"))
     int32 GrassBladeSegments = 1;
 
-    /**
-     * If enabled, grass geometry will not generate back-faces.
-     * This reduces grass triangle generation and index buffers by 50%.
-     * Requires the GrassBladesMaterial to have "Two Sided" enabled.
-     */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Terrain|Grass")
     bool bTwoSidedGrass = true;
 
@@ -179,24 +221,23 @@ public:
     virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 
+public:
+    float GetHeightAtWorldCorner(int32 WorldX, int32 WorldY) const;
+    float GetInterpolatedHeight(float WorldX, float WorldY) const;
+    float GetInterpolatedHeightCached(float WorldX, float WorldY, const FHeightCache& HeightCache) const;
+
 private:
-    struct FVoxelChunk
-    {
-        FIntVector Coord;
-        TArray<EVoxelType> VoxelData;
-        TArray<TArray<int32>> VoxelTriangles;
-        TArray<TArray<int32>> GrassVoxelTriangles;
-        UDynamicMeshComponent* MeshComponent = nullptr;
-        UDynamicMeshComponent* GrassMeshComponent = nullptr;
+    FVector GetSmoothVertexWorld(int32 WorldX, int32 WorldY, int32 WorldZ, int32 VoxX, int32 VoxY, int32 VoxZ, const FHeightCache& HeightCache, const FChunkNeighborhood& Neighborhood) const;
+    FVector GetSmoothNormalWorld(int32 WorldX, int32 WorldY, const FHeightCache& HeightCache) const;
+    float GetNeighborTopHeightWorld(int32 WorldX, int32 WorldY, int32 WorldZ, const FVector& Vertex, const FChunkNeighborhood& Neighborhood, const FHeightCache& HeightCache) const;
 
-        void BuildMesh(ASmoothVoxelTerrain* TerrainOwner);
-        void UpdateVoxel(int32 LocalX, int32 LocalY, int32 LocalZ, EVoxelType NewType, ASmoothVoxelTerrain* TerrainOwner);
+    FLinearColor GetStylizedColorForVoxel(const FVector& WorldPos, EVoxelType VoxelType) const;
 
-        void UpdateVoxelMesh(int32 LocalX, int32 LocalY, int32 LocalZ, EVoxelType NewType, ASmoothVoxelTerrain* TerrainOwner);
-        void RemoveVoxelFaces(int32 LocalX, int32 LocalY, int32 LocalZ, UE::Geometry::FDynamicMesh3& Mesh, UE::Geometry::FDynamicMesh3& GrassMesh, ASmoothVoxelTerrain* TerrainOwner);
-        void AddVoxelFaces(int32 LocalX, int32 LocalY, int32 LocalZ, UE::Geometry::FDynamicMesh3& Mesh, UE::Geometry::FDynamicMesh3& GrassMesh, ASmoothVoxelTerrain* TerrainOwner);
-        void UpdateSharedFace(int32 LocalX, int32 LocalY, int32 LocalZ, ASmoothVoxelTerrain* TerrainOwner, const FIntVector& NeighborDirection);
-    };
+    void AppendVoxelFacesWorld(int32 WorldX, int32 WorldY, int32 WorldZ, UE::Geometry::FDynamicMesh3& Mesh, TArray<int32>& OutTriIDs, const FHeightCache& HeightCache, const FChunkNeighborhood& Neighborhood);
+    void AppendGrassBladesWorld(int32 WorldX, int32 WorldY, int32 WorldZ, UE::Geometry::FDynamicMesh3& Mesh, TArray<int32>& OutTriIDs, const FHeightCache& HeightCache, const FChunkNeighborhood& Neighborhood);
+
+    FVoxelChunk* GetChunk(const FIntVector& Coord);
+    const FVoxelChunk* GetChunk(const FIntVector& Coord) const;
 
     TMap<FIntVector, TUniquePtr<FVoxelChunk>> Chunks;
 
@@ -207,21 +248,6 @@ private:
     FIntVector WorldToChunkCoord(const FVector& WorldPos) const;
     void WorldToLocalVoxel(const FVector& WorldPos, const FIntVector& ChunkCoord, int32& OutX, int32& OutY, int32& OutZ) const;
     FVector ChunkCoordToWorldOrigin(const FIntVector& ChunkCoord) const;
-
-    float GetHeightAtWorldCorner(int32 WorldX, int32 WorldY) const;
-    float GetInterpolatedHeight(float WorldX, float WorldY) const;
-
-    FVector GetSmoothVertexWorld(int32 WorldX, int32 WorldY, int32 WorldZ, int32 VoxX, int32 VoxY, int32 VoxZ) const;
-    FVector GetSmoothNormalWorld(int32 WorldX, int32 WorldY) const;
-    float GetNeighborTopHeightWorld(int32 WorldX, int32 WorldY, int32 WorldZ, const FVector& Vertex) const;
-
-    FLinearColor GetStylizedColorForVoxel(const FVector& WorldPos, EVoxelType VoxelType) const;
-
-    void AppendVoxelFacesWorld(int32 WorldX, int32 WorldY, int32 WorldZ, UE::Geometry::FDynamicMesh3& Mesh, TArray<int32>& OutTriIDs);
-    void AppendGrassBladesWorld(int32 WorldX, int32 WorldY, int32 WorldZ, UE::Geometry::FDynamicMesh3& Mesh, TArray<int32>& OutTriIDs);
-
-    FVoxelChunk* GetChunk(const FIntVector& Coord);
-    const FVoxelChunk* GetChunk(const FIntVector& Coord) const;
 
     bool bCollisionDirty = false;
     void UpdateCollisionIfNeeded();
