@@ -28,13 +28,15 @@ class GROUNDUP_API ASmoothVoxelTerrain : public AActor
     GENERATED_BODY()
 
 public:
-    // Moved to the public section to allow external helper structures to access its types
+    // Compact inline-allocated array type to completely eliminate heap allocations for small triangle lists
+    using FTriIDArray = TArray<int32, TInlineAllocator<12>>;
+
     struct FVoxelChunk
     {
         FIntVector Coord;
         TArray<EVoxelType> VoxelData;
-        TMap<int32, TArray<int32>> VoxelTriangles;
-        TMap<int32, TArray<int32>> GrassVoxelTriangles;
+        TMap<int32, FTriIDArray> VoxelTriangles;
+        TMap<int32, FTriIDArray> GrassVoxelTriangles;
         UDynamicMeshComponent* MeshComponent = nullptr;
         UDynamicMeshComponent* GrassMeshComponent = nullptr;
 
@@ -233,8 +235,8 @@ private:
 
     FLinearColor GetStylizedColorForVoxel(const FVector& WorldPos, EVoxelType VoxelType) const;
 
-    void AppendVoxelFacesWorld(int32 WorldX, int32 WorldY, int32 WorldZ, UE::Geometry::FDynamicMesh3& Mesh, TArray<int32>& OutTriIDs, const FHeightCache& HeightCache, const FChunkNeighborhood& Neighborhood);
-    void AppendGrassBladesWorld(int32 WorldX, int32 WorldY, int32 WorldZ, UE::Geometry::FDynamicMesh3& Mesh, TArray<int32>& OutTriIDs, const FHeightCache& HeightCache, const FChunkNeighborhood& Neighborhood);
+    void AppendVoxelFacesWorld(int32 WorldX, int32 WorldY, int32 WorldZ, UE::Geometry::FDynamicMesh3& Mesh, FTriIDArray& OutTriIDs, const FHeightCache& HeightCache, const FChunkNeighborhood& Neighborhood);
+    void AppendGrassBladesWorld(int32 WorldX, int32 WorldY, int32 WorldZ, UE::Geometry::FDynamicMesh3& Mesh, FTriIDArray& OutTriIDs, const FHeightCache& HeightCache, const FChunkNeighborhood& Neighborhood);
 
     FVoxelChunk* GetChunk(const FIntVector& Coord);
     const FVoxelChunk* GetChunk(const FIntVector& Coord) const;
